@@ -3,7 +3,7 @@
  */
 
 const DB_NAME = 'MoneyTrackerDB';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 class MoneyTrackerDB {
   constructor() {
@@ -38,6 +38,9 @@ class MoneyTrackerDB {
         }
         if (!db.objectStoreNames.contains('investimentos')) {
           db.createObjectStore('investimentos', { keyPath: 'id', autoIncrement: true });
+        }
+        if (!db.objectStoreNames.contains('config')) {
+          db.createObjectStore('config', { keyPath: 'chave' });
         }
       };
     });
@@ -109,6 +112,36 @@ class MoneyTrackerDB {
   updateInvestimento(data) { return this._update('investimentos', data); }
   deleteInvestimento(id) { return this._delete('investimentos', id); }
 
+  // ==========================================
+  // CONFIG: armazenamento chave/valor (PIN e meta de economia), unificado
+  // no mesmo IndexedDB do resto dos dados — assim entra no backup/restore.
+  // ==========================================
+  async getConfigValue(chave, defaultValue = null) {
+    return new Promise((resolve, reject) => {
+      const request = this._getStore('config', 'readonly').get(chave);
+      request.onsuccess = () => resolve(request.result ? request.result.valor : defaultValue);
+      request.onerror = (e) => reject(e.target.error);
+    });
+  }
+
+  async setConfigValue(chave, valor) {
+    return new Promise((resolve, reject) => {
+      const request = this._getStore('config', 'readwrite').put({ chave, valor });
+      request.onsuccess = () => resolve(true);
+      request.onerror = (e) => reject(e.target.error);
+    });
+  }
+
+  async deleteConfigValue(chave) {
+    return new Promise((resolve, reject) => {
+      const request = this._getStore('config', 'readwrite').delete(chave);
+      request.onsuccess = () => resolve(true);
+      request.onerror = (e) => reject(e.target.error);
+    });
+  }
+
+  getAllConfig() { return this._getAll('config'); }
+
   async addTransacao(data) {
     const id = await this._add('transacoes', data);
     await this._adjustBalances(data, 'add');
@@ -169,6 +202,10 @@ class MoneyTrackerDB {
         investimento.rendimentoAcumulado = Number(investimento.patrimônioAtual) - Number(investimento.valorAportado);
         await this.updateInvestimento(investimento);
       }
+    } else if (trans.tipo === 'ajuste') {
+      // valor aqui é o delta assinado (pode ser negativo), diferente dos outros tipos.
+      const conta = await this.getContaById(trans.contaId);
+      if (conta) { conta.saldoAtual = Number(conta.saldoAtual) + (valor * multiplier); await this.updateConta(conta); }
     }
   }
 
@@ -176,7 +213,7 @@ class MoneyTrackerDB {
   // BACKUP: EXPORTAÇÃO E IMPORTAÇÃO COMPLETA
   // ==========================================
   async exportAll() {
-    const stores = ['contas', 'categorias', 'estabelecimentos', 'transacoes', 'investimentos'];
+    const stores = ['contas', 'categorias', 'estabelecimentos', 'transacoes', 'investimentos', 'config'];
     const data = {};
     for (const s of stores) data[s] = await this._getAll(s);
     return {
@@ -187,28 +224,117 @@ class MoneyTrackerDB {
     };
   }
 
-  async importAll(payload) {
-    if (!payload || !payload.data) throw new Error('Arquivo de backup inválido.');
-    const stores = ['contas', 'categorias', 'estabelecimentos', 'transacoes', 'investimentos'];
-
-    // Limpa todas as stores existentes antes de importar (substituição completa)
-    for (const s of stores) {
-      const all = await this._getAll(s);
-      for (const item of all) await this._delete(s, item.id);
+  // ==========================================
+  // VALIDAÇÃO DE SCHEMA DO BACKUP
+  // Roda por inteiro ANTES de qualquer alteração no banco. Se qualquer item
+  // do arquivo for inválido, importAll() nem chega a tocar nos dados atuais.
+  // ==========================================
+  _validateBackupPayload(payload) {
+    if (!payload || typeof payload !== 'object') {
+      throw new Error('Arquivo de backup inválido: conteúdo não é um JSON válido.');
+    }
+    if (payload.app !== 'MoneyTracker') {
+      throw new Error('Este arquivo não parece ser um backup do Money Tracker.');
+    }
+    if (!payload.data || typeof payload.data !== 'object') {
+      throw new Error('Arquivo de backup inválido: seção "data" ausente ou corrompida.');
     }
 
-    // Insere os dados importados preservando os IDs originais (usa put)
+    const stores = ['contas', 'categorias', 'estabelecimentos', 'transacoes', 'investimentos', 'config'];
     for (const s of stores) {
-      const items = payload.data[s] || [];
-      for (const item of items) {
-        await new Promise((res, rej) => {
-          const request = this._getStore(s, 'readwrite').put(item);
-          request.onsuccess = () => res(request.result);
-          request.onerror = (e) => rej(e.target.error);
-        });
+      if (payload.data[s] !== undefined && !Array.isArray(payload.data[s])) {
+        throw new Error(`Arquivo de backup inválido: "${s}" deveria ser uma lista.`);
       }
     }
-    return true;
+
+    const isNum = (v) => typeof v === 'number' && !Number.isNaN(v);
+    const isStr = (v) => typeof v === 'string';
+    const isNumOrNull = (v) => v === null || v === undefined || isNum(v);
+
+    const contaIds = new Set();
+    (payload.data.contas || []).forEach((c, i) => {
+      if (!isStr(c.nome) || !c.nome.trim()) throw new Error(`Conta #${i + 1} inválida: nome ausente.`);
+      if (!isNum(c.saldoAtual)) throw new Error(`Conta "${c.nome}" inválida: saldo precisa ser numérico.`);
+      if (c.id !== undefined) contaIds.add(Number(c.id));
+    });
+
+    (payload.data.categorias || []).forEach((c, i) => {
+      if (!isStr(c.nome) || !c.nome.trim()) throw new Error(`Categoria #${i + 1} inválida: nome ausente.`);
+      if (!isNumOrNull(c.orcamento)) throw new Error(`Categoria "${c.nome}" inválida: orçamento precisa ser numérico.`);
+    });
+
+    (payload.data.estabelecimentos || []).forEach((e, i) => {
+      if (!isStr(e.nome) || !e.nome.trim()) throw new Error(`Estabelecimento #${i + 1} inválido: nome ausente.`);
+    });
+
+    (payload.data.config || []).forEach((c, i) => {
+      if (!isStr(c.chave) || !c.chave.trim()) throw new Error(`Config #${i + 1} inválida: chave ausente.`);
+    });
+
+    const invIds = new Set();
+    (payload.data.investimentos || []).forEach((inv, i) => {
+      if (!isStr(inv.nome) || !inv.nome.trim()) throw new Error(`Investimento #${i + 1} inválido: nome ausente.`);
+      if (!isNum(inv.valorAportado)) throw new Error(`Investimento "${inv.nome}" inválido: valor aportado precisa ser numérico.`);
+      if (!isNum(inv.patrimônioAtual)) throw new Error(`Investimento "${inv.nome}" inválido: patrimônio atual precisa ser numérico.`);
+      if (inv.id !== undefined) invIds.add(Number(inv.id));
+    });
+
+    const tiposValidos = ['receita', 'despesa', 'transferencia', 'aporte', 'rendimento', 'ajuste'];
+    (payload.data.transacoes || []).forEach((t, i) => {
+      if (!tiposValidos.includes(t.tipo)) throw new Error(`Transação #${i + 1} inválida: tipo "${t.tipo}" desconhecido.`);
+      if (t.tipo === 'ajuste') {
+        if (!isNum(t.valor) || t.valor === 0) throw new Error(`Transação #${i + 1} (ajuste) inválida: valor precisa ser numérico e diferente de zero.`);
+      } else if (!isNum(t.valor) || t.valor <= 0) {
+        throw new Error(`Transação #${i + 1} (${t.tipo}) inválida: valor precisa ser numérico e positivo.`);
+      }
+      if (!isStr(t.data) || !t.data) throw new Error(`Transação #${i + 1} (${t.tipo}) inválida: data ausente.`);
+
+      if ((t.tipo === 'receita' || t.tipo === 'despesa' || t.tipo === 'ajuste') && !t.contaId) {
+        throw new Error(`Transação #${i + 1} (${t.tipo}) inválida: conta ausente.`);
+      }
+      if (t.tipo === 'transferencia' && (!t.contaId || !t.contaDestinoId)) {
+        throw new Error(`Transação #${i + 1} (transferência) inválida: conta de origem ou destino ausente.`);
+      }
+      if (t.tipo === 'aporte' && (!t.contaId || !t.investimentoId)) {
+        throw new Error(`Transação #${i + 1} (aporte) inválida: conta ou investimento ausente.`);
+      }
+      if (t.tipo === 'rendimento' && !t.investimentoId) {
+        throw new Error(`Transação #${i + 1} (rendimento) inválida: investimento ausente.`);
+      }
+      if (t.contaId && !contaIds.has(Number(t.contaId))) {
+        throw new Error(`Transação #${i + 1} referencia a conta #${t.contaId}, que não existe no arquivo.`);
+      }
+      if (t.contaDestinoId && !contaIds.has(Number(t.contaDestinoId))) {
+        throw new Error(`Transação #${i + 1} referencia a conta de destino #${t.contaDestinoId}, que não existe no arquivo.`);
+      }
+      if (t.investimentoId && !invIds.has(Number(t.investimentoId))) {
+        throw new Error(`Transação #${i + 1} referencia o investimento #${t.investimentoId}, que não existe no arquivo.`);
+      }
+    });
+  }
+
+  async importAll(payload) {
+    // 1) Valida o arquivo inteiro primeiro — nenhum dado atual é tocado se isso lançar erro.
+    this._validateBackupPayload(payload);
+
+    const stores = ['contas', 'categorias', 'estabelecimentos', 'transacoes', 'investimentos', 'config'];
+
+    // 2) Limpa e insere dentro de UMA ÚNICA transação IndexedDB: se qualquer put() falhar,
+    // a transação inteira é abortada automaticamente e nada do que já foi escrito é
+    // persistido — ou importa tudo, ou não muda nada (atômico).
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction(stores, 'readwrite');
+      tx.onabort = () => reject(tx.error || new Error('Importação cancelada: a transação foi abortada.'));
+      tx.onerror = () => reject(tx.error || new Error('Falha ao importar o backup.'));
+      tx.oncomplete = () => resolve(true);
+
+      for (const s of stores) {
+        const store = tx.objectStore(s);
+        store.clear();
+        const items = payload.data[s] || [];
+        for (const item of items) store.put(item);
+      }
+    });
   }
 }
 
