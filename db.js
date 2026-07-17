@@ -202,10 +202,6 @@ class MoneyTrackerDB {
         investimento.rendimentoAcumulado = Number(investimento.patrimônioAtual) - Number(investimento.valorAportado);
         await this.updateInvestimento(investimento);
       }
-    } else if (trans.tipo === 'ajuste') {
-      // valor aqui é o delta assinado (pode ser negativo), diferente dos outros tipos.
-      const conta = await this.getContaById(trans.contaId);
-      if (conta) { conta.saldoAtual = Number(conta.saldoAtual) + (valor * multiplier); await this.updateConta(conta); }
     }
   }
 
@@ -279,17 +275,13 @@ class MoneyTrackerDB {
       if (inv.id !== undefined) invIds.add(Number(inv.id));
     });
 
-    const tiposValidos = ['receita', 'despesa', 'transferencia', 'aporte', 'rendimento', 'ajuste'];
+    const tiposValidos = ['receita', 'despesa', 'transferencia', 'aporte', 'rendimento'];
     (payload.data.transacoes || []).forEach((t, i) => {
       if (!tiposValidos.includes(t.tipo)) throw new Error(`Transação #${i + 1} inválida: tipo "${t.tipo}" desconhecido.`);
-      if (t.tipo === 'ajuste') {
-        if (!isNum(t.valor) || t.valor === 0) throw new Error(`Transação #${i + 1} (ajuste) inválida: valor precisa ser numérico e diferente de zero.`);
-      } else if (!isNum(t.valor) || t.valor <= 0) {
-        throw new Error(`Transação #${i + 1} (${t.tipo}) inválida: valor precisa ser numérico e positivo.`);
-      }
+      if (!isNum(t.valor) || t.valor <= 0) throw new Error(`Transação #${i + 1} (${t.tipo}) inválida: valor precisa ser numérico e positivo.`);
       if (!isStr(t.data) || !t.data) throw new Error(`Transação #${i + 1} (${t.tipo}) inválida: data ausente.`);
 
-      if ((t.tipo === 'receita' || t.tipo === 'despesa' || t.tipo === 'ajuste') && !t.contaId) {
+      if ((t.tipo === 'receita' || t.tipo === 'despesa') && !t.contaId) {
         throw new Error(`Transação #${i + 1} (${t.tipo}) inválida: conta ausente.`);
       }
       if (t.tipo === 'transferencia' && (!t.contaId || !t.contaDestinoId)) {

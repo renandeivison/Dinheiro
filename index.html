@@ -65,23 +65,23 @@
         </div>
       </div>
 
-      <div class="card">
-        <div class="db-stat-title" style="margin-bottom: 10px;">Resumo do Mês</div>
-        <div class="stat-chip-row">
-          <div class="stat-chip" style="background: var(--success); color: #fff;">
-            <div class="stat-chip-icon" data-icon="trendingUp" data-icon-size="14"></div>
-            <div class="stat-chip-label">Receitas</div>
-            <div id="db-receitas-mes" class="stat-chip-value">R$ 0,00</div>
+      <div class="card" onclick="goToSubView('relatorios')" style="cursor:pointer;">
+        <div class="db-stat-title" style="margin-bottom: 14px;">Resumo do Mês</div>
+        <div class="month-summary-list">
+          <div class="month-summary-row">
+            <div class="month-summary-icon" style="background: var(--success);" data-icon="trendingUp" data-icon-size="16"></div>
+            <div class="month-summary-label">Receitas</div>
+            <div id="db-receitas-mes" class="month-summary-value value-positive">R$ 0,00</div>
           </div>
-          <div class="stat-chip" style="background: var(--danger); color: #fff;">
-            <div class="stat-chip-icon" data-icon="trendingDown" data-icon-size="14"></div>
-            <div class="stat-chip-label">Despesas</div>
-            <div id="db-despeses-mes" class="stat-chip-value">R$ 0,00</div>
+          <div class="month-summary-row">
+            <div class="month-summary-icon" style="background: var(--danger);" data-icon="trendingDown" data-icon-size="16"></div>
+            <div class="month-summary-label">Despesas</div>
+            <div id="db-despeses-mes" class="month-summary-value value-negative">R$ 0,00</div>
           </div>
-          <div class="stat-chip" style="background: var(--accent-primary); color: #fff;">
-            <div class="stat-chip-icon" data-icon="checkCircle" data-icon-size="14"></div>
-            <div class="stat-chip-label">Economia</div>
-            <div id="db-economia-mes" class="stat-chip-value">R$ 0,00</div>
+          <div class="month-summary-row">
+            <div class="month-summary-icon" style="background: var(--accent-primary);" data-icon="checkCircle" data-icon-size="16"></div>
+            <div class="month-summary-label">Economia</div>
+            <div id="db-economia-mes" class="month-summary-value value-positive">R$ 0,00</div>
           </div>
         </div>
       </div>
@@ -428,6 +428,7 @@
           <div class="stat-chip-value" id="investment-detail-ultima"></div>
         </div>
       </div>
+      <div id="investment-detail-chart"></div>
       <h4 class="form-label">Movimentações</h4>
       <div id="investment-detail-tx-list" style="margin-top: 10px;"></div>
     </div>
@@ -485,6 +486,11 @@
         <div class="form-group">
           <label class="form-label" for="tx-date">Data</label>
           <input type="date" id="tx-date" class="form-input" required>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="tx-time">Hora</label>
+          <input type="time" id="tx-time" class="form-input" required>
         </div>
 
         <div style="display: flex; gap: 10px; margin-top: 30px;">
@@ -612,7 +618,7 @@
     <button class="fab-menu-item" style="--fab-color:#6610F2" onclick="openFromFab('aporte')"><span class="fab-menu-icon" data-icon="wallet" data-icon-size="14"></span>Aporte</button>
     <button class="fab-menu-item" style="--fab-color:#F5A623" onclick="openFromFab('rendimento')"><span class="fab-menu-icon" data-icon="sparkles" data-icon-size="14"></span>Rendimento</button>
   </div>
-  <button id="fab-main" class="fab-main" onclick="toggleFabMenu()" aria-label="Abrir menu de lançamento rápido" aria-haspopup="true"><div class="nav-icon" data-icon="plusCircle" data-icon-size="26"></div></button>
+  <button id="fab-main" class="fab-main" onclick="toggleFabMenu()" aria-label="Abrir menu de lançamento rápido" aria-haspopup="true"><span class="fab-plus"></span></button>
 
   <div id="lock-screen" class="lock-screen">
     <div class="lock-icon-wrap" data-icon="lock" data-icon-size="30"></div>

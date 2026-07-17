@@ -113,8 +113,14 @@
     // ACESSIBILIDADE: fechar modais com Esc + mover o foco pro primeiro campo ao abrir
     // ==========================================
     function focusFirstField(containerId) {
+      armBackGuard();
+      const container = document.getElementById(containerId);
+      if (container) {
+        container.scrollTop = 0;
+        const modalContent = container.querySelector('.modal-content');
+        if (modalContent) modalContent.scrollTop = 0;
+      }
       setTimeout(() => {
-        const container = document.getElementById(containerId);
         if (!container) return;
         const focusable = container.querySelector('input:not([type="hidden"]), select, textarea, button');
         if (focusable) focusable.focus();
@@ -123,6 +129,7 @@
 
     const MODAL_ESCAPE_HANDLERS = {
       'modal-confirm': () => resolveConfirm(false),
+      'fab-menu': () => closeFabMenu(),
       'modal-quick-tx': () => qtxClose(),
       'modal-transaction': () => closeTransactionModal(),
       'modal-account': () => closeAccountModal(),
@@ -146,9 +153,47 @@
       }
     });
 
+    // ==========================================
+    // BOTÃO/GESTO VOLTAR DO NAVEGADOR: fecha a tela/modal aberto em vez de sair do
+    // app. Só sai de verdade quando já está no Início sem nada aberto. Funciona
+    // "armando" uma entrada extra no histórico a cada nível aberto; o Android/navegador
+    // consome essa entrada ao voltar, e reagimos no popstate em vez de deixar a página.
+    const BACK_BUTTON_HANDLERS = { ...MODAL_ESCAPE_HANDLERS, 'modal-quick-tx': () => qtxBack() };
+
+    function armBackGuard() {
+      try {
+        history.pushState({ mtBackGuard: true }, '');
+      } catch (e) {
+        // Alguns navegadores restringem pushState em certas origens (ex: file:// sem
+        // servidor). Sem isso o botão voltar não pode ser interceptado, mas o app
+        // continua funcionando normalmente do resto.
+      }
+    }
+
+    window.addEventListener('popstate', () => {
+      for (const id in BACK_BUTTON_HANDLERS) {
+        const el = document.getElementById(id);
+        if (el && el.classList.contains('active')) {
+          BACK_BUTTON_HANDLERS[id]();
+          armBackGuard();
+          return;
+        }
+      }
+      const dashboardActive = document.getElementById('view-dashboard').classList.contains('active');
+      if (!dashboardActive) {
+        switchTab('dashboard', document.querySelector('.nav-item[data-nav="dashboard"]'));
+        armBackGuard();
+        return;
+      }
+      // Já está no Início e nada está aberto: não rearma o guard, deixa o
+      // navegador seguir com o "voltar" de verdade (fecha/sai do app).
+    });
+
     document.addEventListener('DOMContentLoaded', async () => {
       renderStaticIcons();
       await db.init();
+      const temaSalvo = await db.getConfigValue('tema', null);
+      if (temaSalvo) document.documentElement.setAttribute('data-theme', temaSalvo);
       setupColorPickers();
       renderAll();
       await initLock();
@@ -214,14 +259,24 @@
     async function renderAll() {
       cachedAccounts = await db.getContas();
       cachedCategories = await db.getCategorias();
+      cachedCategories.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
       cachedTransactions = await db.getTransacoes();
       cachedInvestments = await db.getInvestimentos();
 
-      cachedTransactions.sort((a, b) => new Date(b.data) - new Date(a.data));
+      cachedTransactions.sort((a, b) => new Date(b.data + 'T' + (b.hora || '00:00')) - new Date(a.data + 'T' + (a.hora || '00:00')));
 
+      renderCachedViews();
+    }
+
+    // Redesenha as telas a partir dos arrays já em memória (cachedAccounts/cachedTransactions/etc.),
+    // sem ir ao IndexedDB de novo. Usado na troca de abas: os dados já estão atualizados (toda
+    // mutação chama renderAll(), que já refaz o cache), então buscar tudo de novo do banco só
+    // atrasava a repintura da tela e causava um flash visível durante a animação de entrada da aba.
+    function renderCachedViews() {
       calculateDashboardMetrics();
       renderAccounts();
       renderInvestments();
+      renderCategories();
       renderVendorsSummary();
       updateAutocompleteSuggestions();
       populateFilterSelectors();
@@ -280,7 +335,8 @@
       changeEl.innerHTML = `${icon(pctVariacao >= 0 ? 'trendingUp' : 'trendingDown', 12)} ${pctVariacao >= 0 ? '+' : ''}${pctVariacao.toFixed(1)}% este mês`;
 
       const econEl = document.getElementById('db-economia-mes');
-      econEl.innerText = `${economiaMes >= 0 ? '+' : ''} ${formatCurrency(economiaMes)}`;
+      econEl.innerText = `${economiaMes >= 0 ? '+' : '-'} ${formatCurrency(Math.abs(economiaMes))}`;
+      econEl.className = 'month-summary-value ' + (economiaMes >= 0 ? 'value-positive' : 'value-negative');
 
       const recentContainer = document.getElementById('dashboard-recent');
       recentContainer.innerHTML = '';
@@ -426,7 +482,7 @@
     }
 
     function getDatesFromTimeframe(timeframe) {
-      const agora = new Date(2026, 6, 13); // Fixado na data de referência do sistema: 13 de Julho de 2026
+      const agora = getReferenceDate();
       let inicio = new Date(agora);
       let fim = new Date(agora);
 
@@ -561,6 +617,7 @@
         valor: Number(document.getElementById('tx-amount').value),
         tipo: type,
         data: document.getElementById('tx-date').value,
+        hora: document.getElementById('tx-time').value || null,
         descricao: document.getElementById('tx-description').value || null,
         contaId: (type !== 'rendimento') ? Number(document.getElementById('tx-account').value) : null,
         contaDestinoId: (type === 'transferencia') ? Number(document.getElementById('tx-account-dest').value) : null,
@@ -595,8 +652,8 @@
       
       let visualColor = '#8B949E'; let visualIcon = icon('shoppingBag', 20); let visualSign = '-'; let visualClass = 'value-negative';
       let nomeExibicao = tx.descricao || tx.estabelecimento || 'Movimentação';
-      const dataLabel = new Date(tx.data + 'T00:00:00').toLocaleDateString('pt-BR', {day: '2-digit', month: 'short'});
-      let legendaParts = includeDate ? [dataLabel] : [];
+      const dataLabel = new Date(tx.data + 'T00:00:00').toLocaleDateString('pt-BR', {day: '2-digit', month: 'short'}) + (tx.hora ? ` • ${tx.hora}` : '');
+      let legendaParts = includeDate ? [dataLabel] : (tx.hora ? [tx.hora] : []);
 
       if (tx.tipo === 'receita') {
         visualColor = cat ? cat.cor : '#198754'; visualIcon = cat ? escapeHtml(cat.icone) : icon('wallet', 20); visualSign = '+'; visualClass = 'value-positive';
@@ -649,6 +706,7 @@
 
       form.reset(); document.getElementById('tx-id').value = ''; btnDel.style.display = 'none';
       document.getElementById('tx-date').value = getReferenceDate().toISOString().split('T')[0];
+      document.getElementById('tx-time').value = getReferenceDate().toTimeString().slice(0, 5);
 
       if(tx) {
         document.getElementById('tx-id').value = tx.id;
@@ -660,6 +718,7 @@
         document.getElementById('tx-vendor').value = tx.estabelecimento || '';
         document.getElementById('tx-description').value = tx.descricao || '';
         document.getElementById('tx-date').value = tx.data;
+        document.getElementById('tx-time').value = tx.hora || '00:00';
         btnDel.style.display = 'block';
 
         const btnSeg = document.querySelector(`.segment-btn[data-tipo="${tx.tipo}"]`);
@@ -677,6 +736,7 @@
       const isOpen = document.getElementById('fab-menu').classList.toggle('active');
       document.getElementById('fab-backdrop').classList.toggle('active', isOpen);
       document.getElementById('fab-main').classList.toggle('open', isOpen);
+      if (isOpen) armBackGuard();
     }
     function closeFabMenu() {
       document.getElementById('fab-menu').classList.remove('active');
@@ -708,9 +768,11 @@
         investimentoId: null,
         estabelecimento: '',
         descricao: '',
-        data: getReferenceDate().toISOString().slice(0, 10)
+        data: getReferenceDate().toISOString().slice(0, 10),
+        hora: getReferenceDate().toTimeString().slice(0, 5)
       };
       document.getElementById('modal-quick-tx').classList.add('active');
+      document.getElementById('modal-quick-tx').scrollTop = 0;
       document.getElementById('qtx-amount-display').innerText = formatCurrency(0);
       document.getElementById('qtx-valor-continue').disabled = true;
       qtxShowStep('valor');
@@ -734,6 +796,7 @@
       qtx.step = step;
       document.querySelectorAll('.qtx-step').forEach(s => s.classList.remove('active'));
       document.getElementById('qtx-step-' + step).classList.add('active');
+      document.getElementById('modal-quick-tx').scrollTop = 0;
       focusFirstField('qtx-step-' + step);
 
       const steps = qtxStepsForCurrentTipo();
@@ -837,7 +900,7 @@
         html += `<div class="form-group"><label class="form-label">Ativo de Investimento</label><select id="qtx-investimento" class="form-input">${invOptions}</select></div>`;
       }
       html += `<div class="form-group"><label class="form-label">Descrição Breve</label><input type="text" id="qtx-descricao" class="form-input" placeholder="Opcional"></div>`;
-      html += `<div class="form-group"><label class="form-label">Data</label><input type="date" id="qtx-data" class="form-input"></div>`;
+      html += `<div class="filters-grid" style="gap:10px;"><div class="form-group" style="margin:0;"><label class="form-label" for="qtx-data">Data</label><input type="date" id="qtx-data" class="form-input"></div><div class="form-group" style="margin:0;"><label class="form-label" for="qtx-hora">Hora</label><input type="time" id="qtx-hora" class="form-input"></div></div>`;
       container.innerHTML = html;
 
       const contaSel = document.getElementById('qtx-conta');
@@ -846,6 +909,7 @@
       const estInput = document.getElementById('qtx-estabelecimento');
       const descInput = document.getElementById('qtx-descricao');
       const dataInput = document.getElementById('qtx-data');
+      const horaInput = document.getElementById('qtx-hora');
 
       // Restaura seleções feitas anteriormente (caso o usuário volte e avance de novo)
       if (contaSel) { if (qtx.contaId) contaSel.value = qtx.contaId; else qtx.contaId = Number(contaSel.value) || null; contaSel.onchange = () => qtx.contaId = Number(contaSel.value); }
@@ -855,6 +919,8 @@
       if (descInput) { descInput.value = qtx.descricao || ''; descInput.oninput = () => qtx.descricao = descInput.value; }
       dataInput.value = qtx.data;
       dataInput.onchange = () => qtx.data = dataInput.value;
+      horaInput.value = qtx.hora;
+      horaInput.onchange = () => qtx.hora = horaInput.value;
     }
 
     async function qtxSave() {
@@ -865,6 +931,7 @@
       const estEl = document.getElementById('qtx-estabelecimento');
       const descEl = document.getElementById('qtx-descricao');
       const dataEl = document.getElementById('qtx-data');
+      const horaEl = document.getElementById('qtx-hora');
 
       if (contaEl && !contaEl.value) { showToast('Selecione uma conta.', 'error'); return; }
       if (contaDestEl && !contaDestEl.value) { showToast('Selecione a conta destino.', 'error'); return; }
@@ -877,6 +944,7 @@
         valor: qtx.valor,
         tipo,
         data: dataEl.value,
+        hora: horaEl.value || null,
         descricao: descEl.value.trim() || null,
         contaId: contaEl ? Number(contaEl.value) : null,
         contaDestinoId: contaDestEl ? Number(contaDestEl.value) : null,
@@ -930,14 +998,25 @@
     // Dica de descoberta do gesto de swipe: só faz sentido em telas touch, e some
     // permanentemente após ser dispensada ou após o usuário usar o gesto pela 1ª vez.
     function isTouchDevice() { return 'ontouchstart' in window || navigator.maxTouchPoints > 0; }
+    // localStorage pode lançar SecurityError de forma síncrona em certas origens
+    // (ex: abrir o app via file:// direto, sem servidor, é tratado como "origem opaca"
+    // por alguns navegadores). Essas duas funções blindam esse acesso pra nunca
+    // quebrar o restante do fluxo de renderização por causa disso.
+    function safeStorageGet(key) {
+      try { return localStorage.getItem(key); } catch (e) { return null; }
+    }
+    function safeStorageSet(key, value) {
+      try { localStorage.setItem(key, value); } catch (e) { /* armazenamento indisponível: ignora */ }
+    }
+
     function updateSwipeHintVisibility() {
       const hint = document.getElementById('swipe-hint');
       if (!hint) return;
-      const seen = localStorage.getItem('mt_swipe_hint_dismissed') === '1';
+      const seen = safeStorageGet('mt_swipe_hint_dismissed') === '1';
       hint.style.display = (isTouchDevice() && !seen && cachedTransactions.length > 0) ? 'flex' : 'none';
     }
     function dismissSwipeHint() {
-      localStorage.setItem('mt_swipe_hint_dismissed', '1');
+      safeStorageSet('mt_swipe_hint_dismissed', '1');
       const hint = document.getElementById('swipe-hint');
       if (hint) hint.style.display = 'none';
     }
@@ -1217,6 +1296,18 @@
 
       document.getElementById('modal-investment-detail').classList.add('active');
       focusFirstField('modal-investment-detail');
+
+      // O canvas só mede largura corretamente com o modal já visível, então o gráfico
+      // é construído depois de ativar o modal.
+      const chartContainer = document.getElementById('investment-detail-chart');
+      chartContainer.innerHTML = '';
+      const series = computeInvestmentSeries(inv);
+      if (series.length >= 2) {
+        const card = createChartCard('Evolução do Patrimônio');
+        chartContainer.appendChild(card);
+        const canvas = card.querySelector('canvas');
+        drawLineChart(canvas, series, '#39D353', card.querySelector('.chart-tap-value'));
+      }
     }
 
     function openInvestmentModal(inv=null){
@@ -1354,7 +1445,9 @@
       document.getElementById('view-' + viewId).classList.add('active');
       document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
       btn.classList.add('active');
-      await renderAll();
+      window.scrollTo(0, 0);
+      if (viewId !== 'dashboard') armBackGuard();
+      renderCachedViews();
       if (viewId === 'mais') await renderSettingsSecurity();
     }
 
@@ -1366,7 +1459,9 @@
       document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
       const maisBtn = document.querySelector('.nav-item[data-nav="mais"]');
       if (maisBtn) maisBtn.classList.add('active');
-      await renderAll();
+      window.scrollTo(0, 0);
+      armBackGuard();
+      renderCachedViews();
       if (viewId === 'relatorios') { renderReport(); setTimeout(updateReportTabsScrollHint, 0); }
       else if (viewId === 'calendario') renderCalendar();
       else if (viewId === 'insights') await renderInsights();
@@ -1374,19 +1469,23 @@
       else if (viewId === 'categorias') renderCategories();
     }
 
-    function toggleTheme() {
-      const h = document.documentElement; h.setAttribute('data-theme', h.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
+    async function toggleTheme() {
+      const h = document.documentElement;
+      const novoTema = h.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+      h.setAttribute('data-theme', novoTema);
+      await db.setConfigValue('tema', novoTema);
       // Redesenha gráficos/calendário ativos para acompanhar as novas cores do tema
       if (document.getElementById('view-relatorios').classList.contains('active')) renderReport();
       if (document.getElementById('view-calendario').classList.contains('active')) renderCalendar();
     }
 
-    function getReferenceDate() { return new Date(2026, 6, 13); } // Data de referência ("hoje") do sistema
+    function getReferenceDate() { return new Date(); } // Data de referência ("hoje") do sistema
 
     // ==========================================
     // BUSCA GLOBAL
     // ==========================================
     function openSearch() {
+      armBackGuard();
       document.getElementById('modal-search').classList.add('active');
       const input = document.getElementById('search-input');
       input.value = '';
@@ -1464,7 +1563,7 @@
     function createChartCard(title) {
       const card = document.createElement('div');
       card.className = 'chart-card';
-      card.innerHTML = `<div class="chart-title">${title}</div><canvas class="chart-canvas"></canvas><div class="chart-legend"></div>`;
+      card.innerHTML = `<div class="chart-title">${title}</div><div class="chart-tap-value" style="display:none;"></div><canvas class="chart-canvas"></canvas><div class="chart-legend"></div>`;
       return card;
     }
 
@@ -1498,7 +1597,7 @@
       canvas.remove();
     }
 
-    function drawLineChart(canvas, series, color) {
+    function drawLineChart(canvas, series, color, hintEl) {
       const cssHeight = 220;
       const ctx = prepCanvas(canvas, cssHeight);
       const cssW = canvas._cssWidth;
@@ -1540,6 +1639,21 @@
         const label = new Date(Number(y), Number(m) - 1, 1).toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '');
         ctx.fillText(label, points[i].x, baseY + 16);
       });
+
+      if (hintEl) {
+        const showPointValue = (clientX) => {
+          const rect = canvas.getBoundingClientRect();
+          const localX = clientX - rect.left;
+          let nearest = 0, best = Infinity;
+          points.forEach((p, i) => { const d = Math.abs(p.x - localX); if (d < best) { best = d; nearest = i; } });
+          const s = series[nearest];
+          const [y, m] = s.mes.split('-');
+          const label = new Date(Number(y), Number(m) - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+          hintEl.innerText = `${label}: ${formatCurrency(s.valor)}`;
+          hintEl.style.display = 'inline-block';
+        };
+        canvas.onclick = (e) => showPointValue(e.clientX);
+      }
     }
 
     function renderReportCategoria(container) {
@@ -1563,30 +1677,58 @@
 
       if (entries.length === 0) { showEmptyChart(card, canvas, 'Sem despesas no período selecionado.'); return; }
 
-      const ctx = prepCanvas(canvas, 240);
-      const cssW = canvas._cssWidth;
-      const cx = cssW / 2, cy = 115, rOuter = 95, rInner = 58;
-      let startAngle = -Math.PI / 2;
-      entries.forEach(e => {
-        const slice = (e.valor / total) * Math.PI * 2;
-        ctx.beginPath(); ctx.moveTo(cx, cy);
-        ctx.arc(cx, cy, rOuter, startAngle, startAngle + slice);
-        ctx.closePath(); ctx.fillStyle = e.color; ctx.fill();
-        startAngle += slice;
-      });
+      let highlighted = null;
 
-      ctx.beginPath(); ctx.arc(cx, cy, rInner, 0, Math.PI * 2); ctx.fillStyle = cssVar('--bg-secondary'); ctx.fill();
+      function draw() {
+        const ctx = prepCanvas(canvas, 240);
+        const cssW = canvas._cssWidth;
+        const cx = cssW / 2, cy = 115, rOuter = 95, rInner = 58;
+        let startAngle = -Math.PI / 2;
+        entries.forEach(e => {
+          const slice = (e.valor / total) * Math.PI * 2;
+          const isHighlighted = highlighted === e.name;
+          const isDimmed = highlighted && !isHighlighted;
+          const r = isHighlighted ? rOuter + 6 : rOuter;
+          ctx.beginPath(); ctx.moveTo(cx, cy);
+          ctx.arc(cx, cy, r, startAngle, startAngle + slice);
+          ctx.closePath();
+          ctx.globalAlpha = isDimmed ? 0.3 : 1;
+          ctx.fillStyle = e.color; ctx.fill();
+          ctx.globalAlpha = 1;
+          startAngle += slice;
+        });
 
-      ctx.fillStyle = cssVar('--text-secondary'); ctx.font = '700 11px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText('TOTAL GASTO', cx, cy - 8);
-      ctx.fillStyle = cssVar('--text-primary'); ctx.font = '800 14px sans-serif';
-      ctx.fillText(formatCurrency(total), cx, cy + 12);
+        ctx.beginPath(); ctx.arc(cx, cy, rInner, 0, Math.PI * 2); ctx.fillStyle = cssVar('--bg-secondary'); ctx.fill();
+
+        const centerEntry = highlighted ? entries.find(e => e.name === highlighted) : null;
+        ctx.fillStyle = cssVar('--text-secondary'); ctx.font = '700 11px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText(centerEntry ? centerEntry.name.toUpperCase() : 'TOTAL GASTO', cx, cy - 8);
+        ctx.fillStyle = cssVar('--text-primary'); ctx.font = '800 14px sans-serif';
+        ctx.fillText(formatCurrency(centerEntry ? centerEntry.valor : total), cx, cy + 12);
+      }
+
+      draw();
 
       entries.forEach(e => {
         const pct = ((e.valor / total) * 100).toFixed(1);
         const item = document.createElement('div');
-        item.className = 'legend-item';
+        item.className = 'legend-item legend-clickable';
+        item.tabIndex = 0;
+        item.setAttribute('role', 'button');
+        item.setAttribute('aria-pressed', 'false');
+        item.setAttribute('aria-label', `Destacar categoria ${e.name}`);
         item.innerHTML = `<span class="legend-dot" style="background:${e.color}"></span>${escapeHtml(e.name)} — ${formatCurrency(e.valor)} (${pct}%)`;
+        const toggleHighlight = () => {
+          highlighted = (highlighted === e.name) ? null : e.name;
+          legend.querySelectorAll('.legend-item').forEach(li => {
+            li.classList.toggle('legend-dimmed', !!highlighted && li !== item);
+            li.setAttribute('aria-pressed', 'false');
+          });
+          item.setAttribute('aria-pressed', String(!!highlighted));
+          draw();
+        };
+        item.onclick = toggleHighlight;
+        item.onkeydown = (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggleHighlight(); } };
         legend.appendChild(item);
       });
     }
@@ -1622,20 +1764,35 @@
       ctx.strokeStyle = cssVar('--border-color');
       ctx.beginPath(); ctx.moveTo(padding, baseY); ctx.lineTo(cssW - padding, baseY); ctx.stroke();
 
+      const bars = [];
       data.forEach((d, i) => {
         const cx = padding + groupW * i + groupW / 2;
         const hR = (d.receita / maxVal) * chartH;
         const hD = (d.despesa / maxVal) * chartH;
         ctx.fillStyle = '#39D353';
         roundRect(ctx, cx - barW - 3, baseY - hR, barW, Math.max(hR, 1), 4); ctx.fill();
+        bars.push({ x: cx - barW - 3, y: baseY - hR, w: barW, h: Math.max(hR, 1), label: 'Receitas', mes: d.mes, valor: d.receita });
         ctx.fillStyle = '#FF7B72';
         roundRect(ctx, cx + 3, baseY - hD, barW, Math.max(hD, 1), 4); ctx.fill();
+        bars.push({ x: cx + 3, y: baseY - hD, w: barW, h: Math.max(hD, 1), label: 'Despesas', mes: d.mes, valor: d.despesa });
 
         ctx.fillStyle = cssVar('--text-secondary'); ctx.font = '700 10px sans-serif'; ctx.textAlign = 'center';
         const [y, mo] = d.mes.split('-');
         const label = new Date(Number(y), Number(mo) - 1, 1).toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '');
         ctx.fillText(label, cx, baseY + 16);
       });
+
+      const hintEl = card.querySelector('.chart-tap-value');
+      canvas.onclick = (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const lx = e.clientX - rect.left, ly = e.clientY - rect.top;
+        const hit = bars.find(b => lx >= b.x && lx <= b.x + b.w && ly >= b.y && ly <= baseY);
+        if (!hit) return;
+        const [y, mo] = hit.mes.split('-');
+        const label = new Date(Number(y), Number(mo) - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+        hintEl.innerText = `${hit.label} em ${label}: ${formatCurrency(hit.valor)}`;
+        hintEl.style.display = 'inline-block';
+      };
 
       legend.innerHTML = `<div class="legend-item"><span class="legend-dot" style="background:#39D353"></span>Receitas</div><div class="legend-item"><span class="legend-dot" style="background:#FF7B72"></span>Despesas</div>`;
     }
@@ -1655,6 +1812,20 @@
         const v = Number(t.valor);
         if (t.tipo === 'receita' || t.tipo === 'rendimento') running += v;
         else if (t.tipo === 'despesa') running -= v;
+        monthlyMap[t.data.substring(0, 7)] = running;
+      });
+      return Object.keys(monthlyMap).sort().map(m => ({ mes: m, valor: monthlyMap[m] }));
+    }
+
+    function computeInvestmentSeries(inv) {
+      const currentTotal = Number(inv.patrimônioAtual);
+      const sorted = cachedTransactions.filter(t => t.investimentoId === inv.id && t.data).sort((a, b) => new Date(a.data) - new Date(b.data));
+      let sumEffects = 0;
+      sorted.forEach(t => { sumEffects += Number(t.valor); });
+      let running = currentTotal - sumEffects;
+      const monthlyMap = {};
+      sorted.forEach(t => {
+        running += Number(t.valor);
         monthlyMap[t.data.substring(0, 7)] = running;
       });
       return Object.keys(monthlyMap).sort().map(m => ({ mes: m, valor: monthlyMap[m] }));
@@ -1686,7 +1857,7 @@
       const canvas = card.querySelector('canvas');
       const series = computePatrimonioSeries();
       if (series.length < 2) { showEmptyChart(card, canvas, 'Histórico insuficiente. Registre movimentações em datas diferentes para gerar a evolução.'); return; }
-      drawLineChart(canvas, series, '#58A6FF');
+      drawLineChart(canvas, series, '#58A6FF', card.querySelector('.chart-tap-value'));
       const legend = card.querySelector('.chart-legend');
       const diff = series[series.length - 1].valor - series[0].valor;
       const pct = series[0].valor !== 0 ? (diff / Math.abs(series[0].valor) * 100) : 0;
@@ -1699,7 +1870,7 @@
       const canvas = card.querySelector('canvas');
       const series = computeSaldoSeries();
       if (series.length < 2) { showEmptyChart(card, canvas, 'Histórico insuficiente. Registre movimentações em datas diferentes para gerar a evolução.'); return; }
-      drawLineChart(canvas, series, '#0F62FE');
+      drawLineChart(canvas, series, '#0F62FE', card.querySelector('.chart-tap-value'));
       const legend = card.querySelector('.chart-legend');
       const diff = series[series.length - 1].valor - series[0].valor;
       legend.innerHTML = `<div class="legend-item">${icon(diff >= 0 ? 'trendingUp' : 'trendingDown', 14)} Variação no período: <b style="margin-left:4px;color:${diff >= 0 ? 'var(--success)' : 'var(--danger)'}">${diff >= 0 ? '+' : ''}${formatCurrency(diff)}</b></div>`;
@@ -1724,6 +1895,7 @@
       const maxV = Math.max(...entries.map(e => e.valor));
       const labelW = 96;
 
+      const bars = [];
       entries.forEach((e, i) => {
         const y = i * rowH + rowH / 2;
         const barMaxW = cssW - labelW - 78;
@@ -1736,10 +1908,21 @@
 
         ctx.fillStyle = color;
         roundRect(ctx, labelW, y - 8, barW, 16, 8); ctx.fill();
+        bars.push({ x: labelW, y: y - 8, w: barW, h: 16, name: e.name, valor: e.valor });
 
         ctx.fillStyle = cssVar('--text-primary'); ctx.font = '700 11px sans-serif';
         ctx.fillText(formatCurrency(e.valor), labelW + barW + 8, y);
       });
+
+      const hintEl = card.querySelector('.chart-tap-value');
+      canvas.onclick = (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const lx = e.clientX - rect.left, ly = e.clientY - rect.top;
+        const hit = bars.find(b => lx >= b.x && lx <= b.x + b.w && ly >= b.y && ly <= b.y + b.h);
+        if (!hit) return;
+        hintEl.innerText = `${hit.name}: ${formatCurrency(hit.valor)}`;
+        hintEl.style.display = 'inline-block';
+      };
     }
 
     // ==========================================
@@ -1784,8 +1967,8 @@
         const info = dayMap[dateStr];
         cell.innerHTML = `<div class="cal-day-num">${d}</div>
           <div class="cal-day-vals">
-            ${info && info.recebido > 0 ? `<div class="cal-day-val value-positive">+${formatCurrencyCompact(info.recebido)}</div>` : ''}
-            ${info && info.gasto > 0 ? `<div class="cal-day-val value-negative">-${formatCurrencyCompact(info.gasto)}</div>` : ''}
+            ${info && info.recebido > 0 ? `<div class="cal-day-val value-positive">+R$ ${formatCurrencyCompact(info.recebido)}</div>` : ''}
+            ${info && info.gasto > 0 ? `<div class="cal-day-val value-negative">-R$ ${formatCurrencyCompact(info.gasto)}</div>` : ''}
           </div>`;
         if (info) cell.onclick = () => openDayDetail(dateStr, info);
         grid.appendChild(cell);
@@ -1969,7 +2152,7 @@
           request.onerror = (e) => reject(e.target.error);
           request.onblocked = () => resolve();
         });
-        localStorage.clear();
+        try { localStorage.clear(); } catch (e) { /* armazenamento indisponível: ignora */ }
         showToast('App resetado com sucesso. Recarregando…', 'success');
         setTimeout(() => location.reload(), 900);
       } catch (err) {
