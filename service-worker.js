@@ -5,7 +5,7 @@
  * pra renderizar a tipografia quando offline).
  */
 
-const CACHE_VERSION = 'v1.2';
+const CACHE_VERSION = 'v3';
 const APP_SHELL_CACHE = `mt-app-shell-${CACHE_VERSION}`;
 const FONTS_CACHE = `mt-fonts-${CACHE_VERSION}`;
 
@@ -13,6 +13,7 @@ const APP_SHELL_ASSETS = [
   './',
   './index.html',
   './db.js',
+  './navigation-stack.js',
   './app.js',
   './styles.css',
   './manifest.json'

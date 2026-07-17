@@ -1,149 +1,70 @@
 /**
- * NAVIGATION STACK SYSTEM
- * 
- * Substitui o sistema frágil de descobrir modais ativos pelo DOM
- * com uma pilha explícita que rastreia a ordem de abertura.
- * 
+ * Money Tracker - Navigation Stack
+ *
+ * Pilha explícita que rastreia, na ordem exata em que foram abertos, todos os
+ * modais/telas que o botão/gesto Voltar do Android deve poder fechar.
+ *
+ * Substitui o antigo esquema baseado em `classList.contains('active')` +
+ * BACK_BUTTON_HANDLERS (ver NAVIGATION_REFACTORING.md).
+ *
  * Uso:
- *   pushNavigation('fab', closeFabMenu);
- *   pushNavigation('account-modal', closeAccountModal);
- *   // Ao pressionar voltar, popstate chama a função no topo da pilha
- * 
- * Benefícios:
- *   - Sem dependência em classList.contains('active')
- *   - Preserva ordem histórica (FIFO)
- *   - Impossível ter "dois ativos ao mesmo tempo"
- *   - Debug fácil com labels
- *   - Transição suave: código antigo funciona enquanto migra
+ *   pushNavigation('modal-account', closeAccountModal, 'Modal Conta'); // ao abrir
+ *   removeNavigation('modal-account');                                 // ao fechar
+ *   navigationStack.pop();                                             // no popstate
+ *   debugNavigation();                                                 // inspeção manual no console
  */
 
 class NavigationStack {
   constructor() {
     this.stack = [];
-    this.debugMode = false; // ativa logs no console
   }
 
   /**
-   * Adiciona uma entrada à pilha
-   * @param {string} id - Identificador único (ex: 'fab', 'modal-account')
-   * @param {Function} closeFn - Função que fecha/reseta o elemento
-   * @param {string} [label] - Nome legível para debug (ex: 'FAB Menu')
+   * Registra um elemento no topo da pilha.
+   * Se o id já estiver presente (ex: reabertura sem fechar antes), move-o pro topo
+   * em vez de duplicar a entrada — evita entradas fantasmas na pilha.
    */
   push(id, closeFn, label = id) {
-    if (typeof closeFn !== 'function') {
-      console.error(`Navigation stack: closeFn must be a function for "${id}"`);
-      return;
-    }
-
-    // Remove entrada duplicada se já existe
-    const existing = this.stack.findIndex(e => e.id === id);
-    if (existing !== -1) {
-      this.stack.splice(existing, 1);
-    }
-
+    this.remove(id);
     this.stack.push({ id, closeFn, label });
-    this._log(`pushed "${label}" (stack size: ${this.stack.length})`);
+  }
+
+  /** Remove um elemento da pilha (chamado quando ele fecha, de onde quer que venha). */
+  remove(id) {
+    const idx = this.stack.findIndex((entry) => entry.id === id);
+    if (idx !== -1) this.stack.splice(idx, 1);
   }
 
   /**
-   * Remove a entrada do topo da pilha e chama sua função de fechamento
-   * @returns {boolean} - true se havia algo para fechar, false se stack vazia
+   * Fecha o elemento do topo da pilha (chamado a partir do listener de popstate).
+   * Quem está no topo é responsável por se remover da pilha dentro do seu próprio
+   * closeFn (diretamente, ou por chamar sua função de fechar de verdade).
+   * Retorna true se havia algo pra fechar, false se a pilha está vazia.
    */
   pop() {
-    if (this.stack.length === 0) {
-      this._log('stack vazia — deixar navegador fechar o app');
-      return false;
-    }
-
-    const entry = this.stack.pop();
-    this._log(`popped "${entry.label}" (stack size: ${this.stack.length})`);
-    
-    try {
-      entry.closeFn();
-    } catch (err) {
-      console.error(`Erro ao chamar closeFn para "${entry.id}":`, err);
-    }
-
+    if (this.stack.length === 0) return false;
+    const top = this.stack[this.stack.length - 1];
+    top.closeFn();
     return true;
   }
 
-  /**
-   * Remove uma entrada específica da pilha (sem chamar closeFn)
-   * Útil quando um elemento já foi fechado e você quer limpá-lo da pilha
-   */
-  remove(id) {
-    const idx = this.stack.findIndex(e => e.id === id);
-    if (idx !== -1) {
-      const entry = this.stack[idx];
-      this.stack.splice(idx, 1);
-      this._log(`removed "${entry.label}" from stack (not closed, just removed)`);
-    }
+  peek() {
+    return this.stack.length ? this.stack[this.stack.length - 1] : null;
   }
 
-  /**
-   * Limpa a pilha completamente (ex: ao resetar o app)
-   */
+  isEmpty() {
+    return this.stack.length === 0;
+  }
+
   clear() {
     this.stack = [];
-    this._log('stack cleared');
-  }
-
-  /**
-   * Retorna true se a pilha tem algo
-   */
-  hasEntries() {
-    return this.stack.length > 0;
-  }
-
-  /**
-   * Retorna o tamanho da pilha
-   */
-  size() {
-    return this.stack.length;
-  }
-
-  /**
-   * Retorna a entrada do topo sem remover
-   */
-  peek() {
-    return this.stack[this.stack.length - 1] || null;
-  }
-
-  /**
-   * Debug: imprime a pilha inteira no console
-   */
-  debugPrint() {
-    console.group(`🔙 Navigation Stack (${this.stack.length} entries)`);
-    this.stack.forEach((entry, idx) => {
-      console.log(`${idx}. ${entry.label} (id: ${entry.id})`);
-    });
-    console.groupEnd();
-  }
-
-  _log(msg) {
-    if (this.debugMode) {
-      console.log(`[NavStack] ${msg}`);
-    }
   }
 }
 
-// Instância global
 const navigationStack = new NavigationStack();
 
-/**
- * Interface pública simplificada
- * Use essas funções no lugar de armBackGuard()
- */
 function pushNavigation(id, closeFn, label) {
   navigationStack.push(id, closeFn, label);
-}
-
-function popNavigation() {
-  return navigationStack.pop();
-}
-
-function clearNavigation() {
-  navigationStack.clear();
 }
 
 function removeNavigation(id) {
@@ -151,64 +72,9 @@ function removeNavigation(id) {
 }
 
 function debugNavigation() {
-  navigationStack.debugPrint();
-}
-
-/**
- * INTEGRAÇÃO COM O POPSTATE
- * 
- * Substitui o listener global window.addEventListener('popstate', ...) do app.js
- * 
- * Antes (linhas 173-203 em app.js):
- *   - Percorria BACK_BUTTON_HANDLERS procurando classList.contains('active')
- *   - Dependia de ordem do objeto
- *   - Podia ficar confuso com múltiplos modais abertos
- * 
- * Depois:
- *   - Pop simples da pilha e chama closeFn
- *   - Ordem sempre respeitada
- *   - Impossível ambiguidade
- */
-function setupNavigationStackListener() {
-  window.addEventListener('popstate', () => {
-    const handled = navigationStack.pop();
-
-    if (handled) {
-      // Havia algo para fechar. Arma novo guard para próximo voltar.
-      setTimeout(armNewNavigationGuard, 10);
-    }
-    // Se não havia nada, deixa o navegador fechar o app naturalmente
+  const entries = navigationStack.stack;
+  console.log(`🔙 Navigation Stack (${entries.length} entries)`);
+  entries.forEach((entry, i) => {
+    console.log(`${i}. ${entry.label} (id: ${entry.id})`);
   });
-}
-
-/**
- * ARMAÇÃO DO GUARD
- * 
- * Substitui armBackGuard() do app.js
- * Adiciona entrada na pilha do navegador para interceptar próximo botão voltar
- * 
- * Mantém compatibilidade: continua usando history.pushState internamente,
- * mas agora coordena com a pilha de navegação
- */
-function armNewNavigationGuard() {
-  try {
-    history.pushState({ mtBackGuard: true }, '');
-  } catch (e) {
-    // Alguns navegadores restringem pushState em file:// etc
-    // Não quebra o app, só não consegue interceptar botão voltar
-  }
-}
-
-/**
- * EXPORTA PARA COMPATIBILIDADE
- * 
- * Se o código legado ainda chama armBackGuard() diretamente,
- * isso vai funcionar enquanto faz a transição para pushNavigation()
- * 
- * Gradualmente substitua:
- *   armBackGuard() → armNewNavigationGuard()
- *   focusFirstField + armBackGuard() → pushNavigation() + focusFirstField()
- */
-function armBackGuard() {
-  armNewNavigationGuard();
 }

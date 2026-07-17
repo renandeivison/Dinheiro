@@ -86,12 +86,15 @@
         cancelBtn.textContent = cancelText;
         _confirmResolve = resolve;
         document.getElementById('modal-confirm').classList.add('active');
+        armBackGuard();
+        pushNavigation('modal-confirm', () => resolveConfirm(false), 'Confirmação');
         setTimeout(() => cancelBtn.focus(), 50);
       });
     }
 
     function resolveConfirm(result) {
       document.getElementById('modal-confirm').classList.remove('active');
+      removeNavigation('modal-confirm');
       if (_confirmResolve) { _confirmResolve(result); _confirmResolve = null; }
     }
 
@@ -133,12 +136,12 @@
       'modal-quick-tx': () => qtxClose(),
       'modal-transaction': () => closeTransactionModal(),
       'modal-account': () => closeAccountModal(),
-      'modal-account-detail': () => document.getElementById('modal-account-detail').classList.remove('active'),
+      'modal-account-detail': () => closeAccountDetailModal(),
       'modal-investment': () => closeInvestmentModal(),
-      'modal-investment-detail': () => document.getElementById('modal-investment-detail').classList.remove('active'),
+      'modal-investment-detail': () => closeInvestmentDetailModal(),
       'modal-category': () => closeCategoryModal(),
-      'modal-day-detail': () => document.getElementById('modal-day-detail').classList.remove('active'),
-      'modal-vendor-detail': () => document.getElementById('modal-vendor-detail').classList.remove('active'),
+      'modal-day-detail': () => closeDayDetailModal(),
+      'modal-vendor-detail': () => closeVendorDetailModal(),
       'modal-search': () => closeSearch()
     };
 
@@ -158,8 +161,11 @@
     // app. Só sai de verdade quando já está no Início sem nada aberto. Funciona
     // "armando" uma entrada extra no histórico a cada nível aberto; o Android/navegador
     // consome essa entrada ao voltar, e reagimos no popstate em vez de deixar a página.
-    const BACK_BUTTON_HANDLERS = { ...MODAL_ESCAPE_HANDLERS, 'modal-quick-tx': () => qtxBack() };
-
+    //
+    // Qual modal fechar é decidido pela Navigation Stack (navigation-stack.js): uma
+    // pilha explícita que rastreia a ordem exata em que os modais foram abertos, em
+    // vez de varrer o DOM procurando `.classList.contains('active')`. Ver
+    // NAVIGATION_REFACTORING.md para o racional completo.
     function armBackGuard() {
       try {
         history.pushState({ mtBackGuard: true }, '');
@@ -171,33 +177,17 @@
     }
 
     window.addEventListener('popstate', () => {
-      let handled = false;
-      
-      // Fecha o primeiro modal ativo que encontrar e para a busca
-      for (const id in BACK_BUTTON_HANDLERS) {
-        const el = document.getElementById(id);
-        if (el && el.classList.contains('active')) {
-          BACK_BUTTON_HANDLERS[id]();
-          handled = true;
-          break; 
-        }
-      }
-
+      const handled = navigationStack.pop();
       if (handled) {
-        // O setTimeout burla o bloqueio do Chrome permitindo que a injeção
-        // de histórico aconteça logo após a finalização nativa do evento
-        setTimeout(armBackGuard, 10);
+        armBackGuard();
         return;
       }
-
       const dashboardActive = document.getElementById('view-dashboard').classList.contains('active');
       if (!dashboardActive) {
-        const navBtn = document.querySelector('.nav-item[data-nav="dashboard"]');
-        switchTab('dashboard', navBtn);
-        setTimeout(armBackGuard, 10);
+        switchTab('dashboard', document.querySelector('.nav-item[data-nav="dashboard"]'));
+        armBackGuard();
         return;
       }
-      
       // Já está no Início e nada está aberto: não rearma o guard, deixa o
       // navegador seguir com o "voltar" de verdade (fecha/sai do app).
     });
@@ -442,7 +432,10 @@
         });
       }
       document.getElementById('modal-vendor-detail').classList.add('active');
+      armBackGuard();
+      pushNavigation('modal-vendor-detail', closeVendorDetailModal, 'Detalhe do Local');
     }
+    function closeVendorDetailModal() { document.getElementById('modal-vendor-detail').classList.remove('active'); removeNavigation('modal-vendor-detail'); }
 
     function openAccountDetailModal(acc) {
       const movimentacoes = cachedTransactions.filter(t => t.contaId === acc.id || t.contaDestinoId === acc.id);
@@ -461,7 +454,7 @@
 
       const editBtn = document.getElementById('account-detail-edit-btn');
       editBtn.onclick = () => {
-        document.getElementById('modal-account-detail').classList.remove('active');
+        closeAccountDetailModal();
         openAccountModal(acc);
       };
 
@@ -477,7 +470,9 @@
 
       document.getElementById('modal-account-detail').classList.add('active');
       focusFirstField('modal-account-detail');
+      pushNavigation('modal-account-detail', closeAccountDetailModal, 'Detalhe da Conta');
     }
+    function closeAccountDetailModal() { document.getElementById('modal-account-detail').classList.remove('active'); removeNavigation('modal-account-detail'); }
 
     // ==========================================
     // SISTEMA DE RANKINGS COM FILTROS AVANÇADOS
@@ -743,18 +738,26 @@
       }
       modal.classList.add('active');
       focusFirstField('modal-transaction');
+      pushNavigation('modal-transaction', closeTransactionModal, 'Nova Transação');
     }
 
     function toggleFabMenu() {
-      const isOpen = document.getElementById('fab-menu').classList.toggle('active');
-      document.getElementById('fab-backdrop').classList.toggle('active', isOpen);
-      document.getElementById('fab-main').classList.toggle('open', isOpen);
-      if (isOpen) armBackGuard();
+      const isOpen = !document.getElementById('fab-menu').classList.contains('active');
+      if (isOpen) {
+        document.getElementById('fab-menu').classList.add('active');
+        document.getElementById('fab-backdrop').classList.add('active');
+        document.getElementById('fab-main').classList.add('open');
+        armBackGuard();
+        pushNavigation('fab-menu', closeFabMenu, 'FAB Menu');
+      } else {
+        closeFabMenu();
+      }
     }
     function closeFabMenu() {
       document.getElementById('fab-menu').classList.remove('active');
       document.getElementById('fab-backdrop').classList.remove('active');
       document.getElementById('fab-main').classList.remove('open');
+      removeNavigation('fab-menu');
     }
     // ==========================================
     // FLUXO DE LANÇAMENTO RÁPIDO (Valor -> Tipo -> Categoria -> Detalhes)
@@ -789,11 +792,16 @@
       document.getElementById('qtx-amount-display').innerText = formatCurrency(0);
       document.getElementById('qtx-valor-continue').disabled = true;
       qtxShowStep('valor');
+      // O Voltar aqui não fecha de cara: volta um passo do wizard (qtxBack), e só
+      // fecha de verdade quando já está no primeiro passo. A entrada na pilha
+      // permanece até qtxClose() rodar (removeNavigation acontece lá).
+      pushNavigation('modal-quick-tx', qtxBack, 'Lançamento Rápido');
     }
 
     function qtxClose() {
       document.getElementById('modal-quick-tx').classList.remove('active');
       qtx = null;
+      removeNavigation('modal-quick-tx');
     }
 
     function qtxStepsForCurrentTipo() {
@@ -982,7 +990,7 @@
       openQuickTx(tipo);
     }
 
-    function closeTransactionModal() { document.getElementById('modal-transaction').classList.remove('active'); }
+    function closeTransactionModal() { document.getElementById('modal-transaction').classList.remove('active'); removeNavigation('modal-transaction'); }
 
     async function deleteTransactionById(id) {
       const ok = await showConfirm({ title: 'Excluir transação?', message: 'Essa ação não pode ser desfeita.', confirmText: 'Excluir' });
@@ -1195,8 +1203,9 @@
       setupColorPickers();
       modal.classList.add('active');
       focusFirstField('modal-account');
+      pushNavigation('modal-account', closeAccountModal, 'Modal Conta');
     }
-    function closeAccountModal() { document.getElementById('modal-account').classList.remove('active'); }
+    function closeAccountModal() { document.getElementById('modal-account').classList.remove('active'); removeNavigation('modal-account'); }
 
     async function saveAccount(e) {
       e.preventDefault();
@@ -1293,7 +1302,7 @@
 
       const editBtn = document.getElementById('investment-detail-edit-btn');
       editBtn.onclick = () => {
-        document.getElementById('modal-investment-detail').classList.remove('active');
+        closeInvestmentDetailModal();
         openInvestmentModal(inv);
       };
 
@@ -1309,6 +1318,7 @@
 
       document.getElementById('modal-investment-detail').classList.add('active');
       focusFirstField('modal-investment-detail');
+      pushNavigation('modal-investment-detail', closeInvestmentDetailModal, 'Detalhe do Ativo');
 
       // O canvas só mede largura corretamente com o modal já visível, então o gráfico
       // é construído depois de ativar o modal.
@@ -1339,8 +1349,10 @@
       } else { document.getElementById('modal-investment-title').innerText = 'Nova Aplicação'; }
       modal.classList.add('active');
       focusFirstField('modal-investment');
+      pushNavigation('modal-investment', closeInvestmentModal, 'Novo Investimento');
     }
-    function closeInvestmentModal() { document.getElementById('modal-investment').classList.remove('active'); }
+    function closeInvestmentModal() { document.getElementById('modal-investment').classList.remove('active'); removeNavigation('modal-investment'); }
+    function closeInvestmentDetailModal() { document.getElementById('modal-investment-detail').classList.remove('active'); removeNavigation('modal-investment-detail'); }
     async function saveInvestment(e){
       e.preventDefault(); const id = document.getElementById('inv-id').value;
       const data = {
@@ -1400,8 +1412,9 @@
       setupColorPickers();
       modal.classList.add('active');
       focusFirstField('modal-category');
+      pushNavigation('modal-category', closeCategoryModal, 'Nova Categoria');
     }
-    function closeCategoryModal() { document.getElementById('modal-category').classList.remove('active'); }
+    function closeCategoryModal() { document.getElementById('modal-category').classList.remove('active'); removeNavigation('modal-category'); }
     async function saveCategory(e){ e.preventDefault(); const id = document.getElementById('cat-id').value; const data = { nome: document.getElementById('cat-name').value, icone: document.getElementById('cat-icon').value, orcamento: Number(document.getElementById('cat-budget').value)||null, cor: document.getElementById('cat-color').value }; if(id){ data.id = Number(id); await db.updateCategoria(data); } else { await db.addCategoria(data); } closeCategoryModal(); await renderAll(); }
 
     async function deleteCategory() {
@@ -1455,16 +1468,9 @@
 
     async function switchTab(viewId, btn) {
       document.querySelectorAll('.section-view').forEach(v => v.classList.remove('active'));
-      const viewEl = document.getElementById('view-' + viewId);
-      if (viewEl) viewEl.classList.add('active');
-      
+      document.getElementById('view-' + viewId).classList.add('active');
       document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
-      
-      // Checagem de segurança (Impede o crash se o botão for null)
-      if (btn) {
-        btn.classList.add('active');
-      }
-      
+      btn.classList.add('active');
       window.scrollTo(0, 0);
       if (viewId !== 'dashboard') armBackGuard();
       renderCachedViews();
@@ -1511,8 +1517,9 @@
       input.value = '';
       document.getElementById('search-results').innerHTML = '<div class="search-empty">Digite para buscar em suas movimentações.</div>';
       setTimeout(() => input.focus(), 150);
+      pushNavigation('modal-search', closeSearch, 'Busca');
     }
-    function closeSearch() { document.getElementById('modal-search').classList.remove('active'); }
+    function closeSearch() { document.getElementById('modal-search').classList.remove('active'); removeNavigation('modal-search'); }
 
     function runSearch() {
       const q = document.getElementById('search-input').value.trim().toLowerCase();
@@ -2003,7 +2010,10 @@
       list.innerHTML = '';
       info.txs.forEach(tx => list.appendChild(createTransactionCard(tx)));
       document.getElementById('modal-day-detail').classList.add('active');
+      armBackGuard();
+      pushNavigation('modal-day-detail', closeDayDetailModal, 'Detalhe do Dia');
     }
+    function closeDayDetailModal() { document.getElementById('modal-day-detail').classList.remove('active'); removeNavigation('modal-day-detail'); }
 
     // ==========================================
     // INSIGHTS AUTOMÁTICOS

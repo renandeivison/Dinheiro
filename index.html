@@ -296,7 +296,7 @@
       <div class="card" style="margin-bottom: 24px;">
         <label class="form-label" for="meta-economia-input">Meta mensal de economia (R$)</label>
         <input type="number" step="0.01" id="meta-economia-input" class="form-input" placeholder="Ex: 1000,00" onchange="saveMetaEconomia()">
-        <p style="font-size:12px; color:var(--text-secondary); margin-top:8px; line-height:1.5;">Usada no Insight "Meta de economia" pra acompanhar o quanto você já economizou este mês em relação às suas receitas.</p>
+        <p style="font-size:12px; color:var(--text-secondary); margin-top:8px; line-height:1.5;">Usada no Insight "Meta de economia" pra acompanhar o quanto você já economizou este mês em relação ao objetivo.</p>
       </div>
 
       <div class="mais-group-title">Segurança</div>
@@ -307,7 +307,7 @@
         </div>
       </div>
       <div id="security-actions" style="display:flex; gap:10px; margin-bottom: 10px;"></div>
-      <p style="font-size:12px; color:var(--text-secondary); margin: 0 0 24px; line-height:1.5;">O PIN bloqueia apenas a tela de acesso ao app. Os dados continuam salvos neste dispositivo sem criptografia. Para máxima segurança, também faça um backup dos dados em local seguro.</p>
+      <p style="font-size:12px; color:var(--text-secondary); margin: 0 0 24px; line-height:1.5;">O PIN bloqueia apenas a tela de acesso ao app. Os dados continuam salvos neste dispositivo sem criptografia adicional.</p>
 
       <div class="mais-group-title">Backup dos dados</div>
       <div class="mais-menu" style="margin-bottom: 8px;">
@@ -350,7 +350,7 @@
     </div>
   </div>
 
-  <div id="modal-day-detail" class="modal" onclick="if(event.target === this) this.classList.remove('active')">
+  <div id="modal-day-detail" class="modal" onclick="if(event.target === this) closeDayDetailModal()">
     <div class="modal-content">
       <h3 id="day-detail-title" style="margin-bottom: 6px;">Dia</h3>
       <div id="day-detail-stats" style="margin-bottom: 20px; font-size: 13px; color: var(--text-secondary)"></div>
@@ -358,7 +358,7 @@
     </div>
   </div>
 
-  <div id="modal-vendor-detail" class="modal" onclick="if(event.target === this) this.classList.remove('active')">
+  <div id="modal-vendor-detail" class="modal" onclick="if(event.target === this) closeVendorDetailModal()">
     <div class="modal-content">
       <div style="display:flex; align-items:center; gap:14px; margin-bottom:14px;">
         <div class="card-icon-wrapper" id="vendor-detail-icon" style="background:var(--bg-tertiary); color:var(--text-primary)"></div>
@@ -384,7 +384,7 @@
     </div>
   </div>
 
-  <div id="modal-account-detail" class="modal" onclick="if(event.target === this) this.classList.remove('active')">
+  <div id="modal-account-detail" class="modal" onclick="if(event.target === this) closeAccountDetailModal()">
     <div class="modal-content">
       <div style="display:flex; align-items:center; gap:14px; margin-bottom:14px;">
         <div class="card-icon-wrapper" id="account-detail-icon" style="background:var(--bg-tertiary); color:var(--text-primary)"></div>
@@ -407,7 +407,7 @@
     </div>
   </div>
 
-  <div id="modal-investment-detail" class="modal" onclick="if(event.target === this) this.classList.remove('active')">
+  <div id="modal-investment-detail" class="modal" onclick="if(event.target === this) closeInvestmentDetailModal()">
     <div class="modal-content">
       <div style="display:flex; align-items:center; gap:14px; margin-bottom:14px;">
         <div class="card-icon-wrapper" id="investment-detail-icon" style="background:var(--accent-secondary); color:var(--accent-primary)"></div>
@@ -553,10 +553,9 @@
       <form id="form-account" onsubmit="saveAccount(event)">
         <input type="hidden" id="acc-id">
         <div class="form-group"><label class="form-label" for="acc-name">Nome da Conta</label><input type="text" id="acc-name" class="form-input" required></div>
-        <div class="form-group"><label class="form-label" id="acc-initial-label" for="acc-initial">Saldo Inicial (R$)</label><input type="number" step="0.01" id="acc-initial" class="form-input" required></div>
+        <div class="form-group"><label class="form-label" id="acc-initial-label" for="acc-initial">Saldo Inicial (R$)</label><input type="number" step="0.01" id="acc-initial" class="form-input" required><div id="acc-initial-hint" style="display:none; font-size:12px; color:var(--text-secondary); margin-top:6px; line-height:1.4;">Alterar este valor gera automaticamente uma transação "Ajuste de saldo" no histórico da conta, refletindo a diferença entre o saldo atual e o valor digitado.</div></div>
         <div class="form-group"><label class="form-label" for="acc-icon">Ícone</label><input type="text" id="acc-icon" class="form-input" required></div>
         <div class="form-group"><label class="form-label" id="acc-color-label">Cor</label><div class="color-grid" id="account-color-picker" role="group" aria-labelledby="acc-color-label"></div><input type="hidden" id="acc-color" value="#0F62FE"></div>
-        <div id="acc-initial-hint" style="font-size:12px; color:var(--text-secondary); display:none;">Aqui você pode ajustar o saldo atual. O diferença será lançada como um ajuste de saldo.</div>
         <div style="display: flex; gap: 10px; margin-top: 30px;"><button type="button" id="btn-delete-acc" class="btn btn-danger" style="display: none;" onclick="deleteAccount()">Excluir</button><button type="submit" class="btn btn-primary" style="flex:1">Salvar</button></div>
       </form>
     </div>
@@ -569,10 +568,10 @@
         <input type="hidden" id="inv-id">
         <div class="form-group"><label class="form-label" for="inv-name">Nome do Ativo</label><input type="text" id="inv-name" class="form-input" required></div>
         <div class="form-group"><label class="form-label" for="inv-institution">Instituição</label><input type="text" id="inv-institution" class="form-input" required></div>
-        <div class="form-group"><label class="form-label" for="inv-type">Tipo</label><select id="inv-type" class="form-input"><option value="Renda Fixa">Renda Fixa</option><option value="Ações">Ações</option><option value="Fundos">Fundos</option><option value="Criptomoedas">Criptomoedas</option><option value="Outro">Outro</option></select></div>
+        <div class="form-group"><label class="form-label" for="inv-type">Tipo</label><select id="inv-type" class="form-input"><option value="Renda Fixa">Renda Fixa</option><option value="Ações">Ações</option><option value="FIIs">FIIs</option><option value="Cripto">Cripto</option></select></div>
         <div class="form-group"><label class="form-label" for="inv-invested">Valor Aportado Inicial</label><input type="number" step="0.01" id="inv-invested" class="form-input" required></div>
         <div class="form-group"><label class="form-label" for="inv-current">Patrimônio Atual</label><input type="number" step="0.01" id="inv-current" class="form-input" required></div>
-        <div style="display: flex; gap: 10px; margin-top: 30px;"><button type="button" id="btn-delete-inv" class="btn btn-danger" style="display: none;" onclick="deleteInvestment()">Excluir</button><button type="submit" class="btn btn-primary" style="flex:1">Salvar</button></div>
+        <div style="display: flex; gap: 10px; margin-top: 30px;"><button type="button" id="btn-delete-inv" class="btn btn-danger" style="display: none;" onclick="deleteInvestment()">Excluir</button><button type="submit" class="btn btn-primary" style="flex:1">Salvar Ativo</button></div>
       </form>
     </div>
   </div>
