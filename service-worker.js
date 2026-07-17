@@ -5,11 +5,11 @@
  * pra renderizar a tipografia quando offline).
  */
 
-const CACHE_VERSION = 'v3';
+const CACHE_VERSION = 'v4';
 const APP_SHELL_CACHE = `mt-app-shell-${CACHE_VERSION}`;
 const FONTS_CACHE = `mt-fonts-${CACHE_VERSION}`;
 
-const APP_SHELL_ASSETS = [
+const CRITICAL_ASSETS = [
   './',
   './index.html',
   './db.js',
@@ -19,10 +19,27 @@ const APP_SHELL_ASSETS = [
   './manifest.json'
 ];
 
+// Ícones: cacheados um a um, sem derrubar a instalação inteira se algum arquivo
+// estiver com nome/caminho errado ou ainda não tiver sido colocado na pasta.
+const ICON_ASSETS = [
+  './favicon.ico',
+  './icons/favicon-16x16.png',
+  './icons/favicon-32x32.png',
+  './icons/apple-touch-icon.png',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
+  './icons/icon-maskable-512.png'
+];
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(APP_SHELL_CACHE)
-      .then((cache) => cache.addAll(APP_SHELL_ASSETS))
+      .then((cache) => cache.addAll(CRITICAL_ASSETS).then(() => cache))
+      .then((cache) => Promise.all(
+        ICON_ASSETS.map((url) => cache.add(url).catch((err) => {
+          console.warn('[SW] Ícone não encontrado, pulando do cache:', url, err);
+        }))
+      ))
       .then(() => self.skipWaiting())
   );
 });
