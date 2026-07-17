@@ -1,4 +1,4 @@
-const COLORS = ['#0F62FE', '#198754', '#DC3545', '#FFC107', '#6610F2', '#FD7E14', '#20C997', '#E83E8C'];
+    const COLORS = ['#0F62FE', '#198754', '#DC3545', '#FFC107', '#6610F2', '#FD7E14', '#20C997', '#E83E8C'];
     let cachedTransactions = [];
     let cachedAccounts = [];
     let cachedCategories = [];
@@ -171,20 +171,33 @@ const COLORS = ['#0F62FE', '#198754', '#DC3545', '#FFC107', '#6610F2', '#FD7E14'
     }
 
     window.addEventListener('popstate', () => {
+      let handled = false;
+      
+      // Fecha o primeiro modal ativo que encontrar e para a busca
       for (const id in BACK_BUTTON_HANDLERS) {
         const el = document.getElementById(id);
         if (el && el.classList.contains('active')) {
           BACK_BUTTON_HANDLERS[id]();
-          armBackGuard();
-          return;
+          handled = true;
+          break; 
         }
       }
-      const dashboardActive = document.getElementById('view-dashboard').classList.contains('active');
-      if (!dashboardActive) {
-        switchTab('dashboard', document.querySelector('.nav-item[data-nav="dashboard"]'));
-        armBackGuard();
+
+      if (handled) {
+        // O setTimeout burla o bloqueio do Chrome permitindo que a injeção
+        // de histórico aconteça logo após a finalização nativa do evento
+        setTimeout(armBackGuard, 10);
         return;
       }
+
+      const dashboardActive = document.getElementById('view-dashboard').classList.contains('active');
+      if (!dashboardActive) {
+        const navBtn = document.querySelector('.nav-item[data-nav="dashboard"]');
+        switchTab('dashboard', navBtn);
+        setTimeout(armBackGuard, 10);
+        return;
+      }
+      
       // Já está no Início e nada está aberto: não rearma o guard, deixa o
       // navegador seguir com o "voltar" de verdade (fecha/sai do app).
     });
@@ -1442,9 +1455,16 @@ const COLORS = ['#0F62FE', '#198754', '#DC3545', '#FFC107', '#6610F2', '#FD7E14'
 
     async function switchTab(viewId, btn) {
       document.querySelectorAll('.section-view').forEach(v => v.classList.remove('active'));
-      document.getElementById('view-' + viewId).classList.add('active');
+      const viewEl = document.getElementById('view-' + viewId);
+      if (viewEl) viewEl.classList.add('active');
+      
       document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
-      btn.classList.add('active');
+      
+      // Checagem de segurança (Impede o crash se o botão for null)
+      if (btn) {
+        btn.classList.add('active');
+      }
+      
       window.scrollTo(0, 0);
       if (viewId !== 'dashboard') armBackGuard();
       renderCachedViews();
@@ -1762,7 +1782,7 @@ const COLORS = ['#0F62FE', '#198754', '#DC3545', '#FFC107', '#6610F2', '#FD7E14'
       const barW = Math.min(20, groupW / 4);
 
       ctx.strokeStyle = cssVar('--border-color');
-      ctx.beginPath(); ctx.moveTo(padding, baseY); ctx.lineTo(cssW - padding, baseY); stroke();
+      ctx.beginPath(); ctx.moveTo(padding, baseY); ctx.lineTo(cssW - padding, baseY); ctx.stroke();
 
       const bars = [];
       data.forEach((d, i) => {
@@ -1870,61 +1890,441 @@ const COLORS = ['#0F62FE', '#198754', '#DC3545', '#FFC107', '#6610F2', '#FD7E14'
       const canvas = card.querySelector('canvas');
       const series = computeSaldoSeries();
       if (series.length < 2) { showEmptyChart(card, canvas, 'Histórico insuficiente. Registre movimentações em datas diferentes para gerar a evolução.'); return; }
-      drawLineChart(canvas, series, '#198754', card.querySelector('.chart-tap-value'));
+      drawLineChart(canvas, series, '#0F62FE', card.querySelector('.chart-tap-value'));
       const legend = card.querySelector('.chart-legend');
       const diff = series[series.length - 1].valor - series[0].valor;
-      const pct = series[0].valor !== 0 ? (diff / Math.abs(series[0].valor) * 100) : 0;
-      legend.innerHTML = `<div class="legend-item">${icon(diff >= 0 ? 'trendingUp' : 'trendingDown', 14)} Variação no período: <b style="margin-left:4px;color:${diff >= 0 ? 'var(--success)' : 'var(--danger)'}">${diff >= 0 ? '+' : ''}${formatCurrency(diff)} (${pct.toFixed(1)}%)</b></div>`;
+      legend.innerHTML = `<div class="legend-item">${icon(diff >= 0 ? 'trendingUp' : 'trendingDown', 14)} Variação no período: <b style="margin-left:4px;color:${diff >= 0 ? 'var(--success)' : 'var(--danger)'}">${diff >= 0 ? '+' : ''}${formatCurrency(diff)}</b></div>`;
     }
 
     function renderReportEstabelecimento(container) {
       container.appendChild(createPeriodFilterRow());
-      const card = createChartCard('Top Gastos por Estabelecimento');
+      const card = createChartCard('Gastos por Estabelecimento');
       container.appendChild(card);
       const canvas = card.querySelector('canvas');
-      const legend = card.querySelector('.chart-legend');
 
-      const despesas = cachedTransactions.filter(t => t.tipo === 'despesa' && (!reportPeriod || (t.data && t.data.startsWith(reportPeriod))));
+      const despesas = cachedTransactions.filter(t => t.tipo === 'despesa' && t.estabelecimento && (!reportPeriod || (t.data && t.data.startsWith(reportPeriod))));
       const map = {};
-      despesas.forEach(t => {
-        if (t.estabelecimento && t.estabelecimento.trim() !== '') {
-          const nomeKey = t.estabelecimento.trim();
-          if (!map[nomeKey]) map[nomeKey] = 0;
-          map[nomeKey] += Number(t.valor);
-        }
-      });
+      despesas.forEach(t => { const key = t.estabelecimento.trim(); map[key] = (map[key] || 0) + Number(t.valor); });
+      const entries = Object.keys(map).map(k => ({ name: k, valor: map[k] })).sort((a, b) => b.valor - a.valor).slice(0, 8);
 
-      const entries = Object.keys(map).map(k => ({ name: k, valor: map[k] })).sort((a, b) => b.valor - a.valor).slice(0, 5);
-      const totalPeriodo = entries.reduce((s, e) => s + e.valor, 0);
+      if (entries.length === 0) { showEmptyChart(card, canvas, 'Sem gastos por estabelecimento no período selecionado.'); return; }
 
-      if (entries.length === 0) { showEmptyChart(card, canvas, 'Sem despesas em estabelecimentos no período selecionado.'); return; }
-
-      const ctx = prepCanvas(canvas, 240);
+      const rowH = 36;
+      const ctx = prepCanvas(canvas, entries.length * rowH + 10);
       const cssW = canvas._cssWidth;
-      const padding = 20, chartH = 150, topPad = 20, baseY = topPad + chartH;
-      const stepX = (cssW - padding * 2) / entries.length;
-      const barW = Math.min(25, stepX - 12);
-      const maxVal = Math.max(...entries.map(e => e.valor), 1);
+      const maxV = Math.max(...entries.map(e => e.valor));
+      const labelW = 96;
 
-      ctx.strokeStyle = cssVar('--border-color');
-      ctx.beginPath(); ctx.moveTo(padding, baseY); ctx.lineTo(cssW - padding, baseY); ctx.stroke();
-
+      const bars = [];
       entries.forEach((e, i) => {
+        const y = i * rowH + rowH / 2;
+        const barMaxW = cssW - labelW - 78;
+        const barW = Math.max((e.valor / maxV) * barMaxW, 4);
         const color = COLORS[i % COLORS.length];
-        const h = (e.valor / maxVal) * chartH;
-        const cx = padding + stepX * i + stepX / 2;
-        ctx.fillStyle = color;
-        roundRect(ctx, cx - barW / 2, baseY - h, barW, Math.max(h, 1), 4);
-        ctx.fill();
 
-        ctx.fillStyle = cssVar('--text-secondary'); ctx.font = '700 10px sans-serif'; ctx.textAlign = 'center';
-        let shortName = e.name.length > 8 ? e.name.substring(0, 6) + '..' : e.name;
-        ctx.fillText(shortName, cx, baseY + 16);
+        ctx.fillStyle = cssVar('--text-primary'); ctx.font = '600 11px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        const name = e.name.length > 13 ? e.name.substring(0, 12) + '…' : e.name;
+        ctx.fillText(name, 0, y);
+
+        ctx.fillStyle = color;
+        roundRect(ctx, labelW, y - 8, barW, 16, 8); ctx.fill();
+        bars.push({ x: labelW, y: y - 8, w: barW, h: 16, name: e.name, valor: e.valor });
+
+        ctx.fillStyle = cssVar('--text-primary'); ctx.font = '700 11px sans-serif';
+        ctx.fillText(formatCurrency(e.valor), labelW + barW + 8, y);
       });
 
-      legend.innerHTML = entries.map((e, i) => {
-        const color = COLORS[i % COLORS.length];
-        const pct = ((e.valor / totalPeriodo) * 100).toFixed(1);
-        return `<div class="legend-item"><span class="legend-dot" style="background:${color}"></span>${escapeHtml(e.name)} — ${formatCurrency(e.valor)} (${pct}%)</div>`;
-      }).join('');
+      const hintEl = card.querySelector('.chart-tap-value');
+      canvas.onclick = (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const lx = e.clientX - rect.left, ly = e.clientY - rect.top;
+        const hit = bars.find(b => lx >= b.x && lx <= b.x + b.w && ly >= b.y && ly <= b.y + b.h);
+        if (!hit) return;
+        hintEl.innerText = `${hit.name}: ${formatCurrency(hit.valor)}`;
+        hintEl.style.display = 'inline-block';
+      };
+    }
+
+    // ==========================================
+    // CALENDÁRIO
+    // ==========================================
+    let calDate = getReferenceDate();
+
+    function changeCalMonth(delta) { calDate = new Date(calDate.getFullYear(), calDate.getMonth() + delta, 1); renderCalendar(); }
+
+    function renderCalendar() {
+      const year = calDate.getFullYear(), month = calDate.getMonth();
+      const monthStr = `${year}-${String(month + 1).padStart(2, '0')}`;
+      document.getElementById('cal-nav-title').innerText = calDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+
+      const dayMap = {};
+      let totalRecebido = 0, totalGasto = 0;
+      cachedTransactions.forEach(t => {
+        if (!t.data || !t.data.startsWith(monthStr)) return;
+        if (!dayMap[t.data]) dayMap[t.data] = { recebido: 0, gasto: 0, txs: [] };
+        dayMap[t.data].txs.push(t);
+        if (t.tipo === 'receita' || t.tipo === 'rendimento') { dayMap[t.data].recebido += Number(t.valor); totalRecebido += Number(t.valor); }
+        if (t.tipo === 'despesa') { dayMap[t.data].gasto += Number(t.valor); totalGasto += Number(t.valor); }
+      });
+
+      document.getElementById('cal-total-recebido').innerText = formatCurrency(totalRecebido);
+      document.getElementById('cal-total-gasto').innerText = formatCurrency(totalGasto);
+
+      const startWeekday = new Date(year, month, 1).getDay();
+      const daysInMonth = new Date(year, month + 1, 0).getDate();
+      const grid = document.getElementById('cal-grid');
+      grid.innerHTML = '';
+
+      for (let i = 0; i < startWeekday; i++) { const empty = document.createElement('div'); empty.className = 'cal-day empty'; grid.appendChild(empty); }
+
+      const ref = getReferenceDate();
+      const todayStr = `${ref.getFullYear()}-${String(ref.getMonth() + 1).padStart(2, '0')}-${String(ref.getDate()).padStart(2, '0')}`;
+
+      for (let d = 1; d <= daysInMonth; d++) {
+        const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        const cell = document.createElement('div');
+        cell.className = 'cal-day' + (dateStr === todayStr ? ' today' : '');
+        const info = dayMap[dateStr];
+        cell.innerHTML = `<div class="cal-day-num">${d}</div>
+          <div class="cal-day-vals">
+            ${info && info.recebido > 0 ? `<div class="cal-day-val value-positive">+R$ ${formatCurrencyCompact(info.recebido)}</div>` : ''}
+            ${info && info.gasto > 0 ? `<div class="cal-day-val value-negative">-R$ ${formatCurrencyCompact(info.gasto)}</div>` : ''}
+          </div>`;
+        if (info) cell.onclick = () => openDayDetail(dateStr, info);
+        grid.appendChild(cell);
+      }
+    }
+
+    function openDayDetail(dateStr, info) {
+      const dateObj = new Date(dateStr + 'T00:00:00');
+      document.getElementById('day-detail-title').innerText = dateObj.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' });
+      document.getElementById('day-detail-stats').innerText = `Recebido: ${formatCurrency(info.recebido)}  •  Gasto: ${formatCurrency(info.gasto)}`;
+      const list = document.getElementById('day-detail-tx-list');
+      list.innerHTML = '';
+      info.txs.forEach(tx => list.appendChild(createTransactionCard(tx)));
+      document.getElementById('modal-day-detail').classList.add('active');
+    }
+
+    // ==========================================
+    // INSIGHTS AUTOMÁTICOS
+    // ==========================================
+    async function renderInsights() {
+      const container = document.getElementById('insights-list');
+      container.innerHTML = '';
+
+      const ref = getReferenceDate();
+      const curMonth = `${ref.getFullYear()}-${String(ref.getMonth() + 1).padStart(2, '0')}`;
+      const prevDate = new Date(ref.getFullYear(), ref.getMonth() - 1, 1);
+      const prevMonth = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, '0')}`;
+
+      const insights = [];
+
+      // Categoria que mais cresceu
+      const catCur = {}, catPrev = {};
+      cachedTransactions.forEach(t => {
+        if (t.tipo !== 'despesa') return;
+        const cat = cachedCategories.find(c => c.id === t.categoriaId);
+        const key = cat ? cat.nome : 'Sem categoria';
+        if (t.data && t.data.startsWith(curMonth)) catCur[key] = (catCur[key] || 0) + Number(t.valor);
+        if (t.data && t.data.startsWith(prevMonth)) catPrev[key] = (catPrev[key] || 0) + Number(t.valor);
+      });
+      let maiorCrescimento = null;
+      Object.keys(catCur).forEach(key => {
+        const diff = catCur[key] - (catPrev[key] || 0);
+        if (!maiorCrescimento || diff > maiorCrescimento.diff) maiorCrescimento = { key, diff, cur: catCur[key], prev: catPrev[key] || 0 };
+      });
+      if (maiorCrescimento && maiorCrescimento.diff > 0) {
+        insights.push({ iconName: 'trendingUp', title: 'Categoria que mais cresceu', desc: `${maiorCrescimento.key} teve o maior aumento de gastos: de ${formatCurrency(maiorCrescimento.prev)} para ${formatCurrency(maiorCrescimento.cur)} neste mês.` });
+      } else {
+        insights.push({ iconName: 'trendingUp', title: 'Categoria que mais cresceu', desc: 'Nenhuma categoria teve aumento de gastos em relação ao mês anterior.' });
+      }
+
+      // Estabelecimento onde mais foi gasto
+      const vendorMap = {};
+      cachedTransactions.forEach(t => { if (t.tipo === 'despesa' && t.estabelecimento && t.data && t.data.startsWith(curMonth)) vendorMap[t.estabelecimento] = (vendorMap[t.estabelecimento] || 0) + Number(t.valor); });
+      const topVendor = Object.keys(vendorMap).sort((a, b) => vendorMap[b] - vendorMap[a])[0];
+      if (topVendor) {
+        insights.push({ iconName: 'mapPin', title: 'Estabelecimento com mais gastos', desc: `${topVendor} foi o local com maior gasto este mês, somando ${formatCurrency(vendorMap[topVendor])}.` });
+      } else {
+        insights.push({ iconName: 'mapPin', title: 'Estabelecimento com mais gastos', desc: 'Nenhuma despesa com estabelecimento registrada este mês.' });
+      }
+
+      // Evolução do patrimônio
+      const patSeries = computePatrimonioSeries();
+      if (patSeries.length >= 2) {
+        const last = patSeries[patSeries.length - 1], prev = patSeries[patSeries.length - 2];
+        const diff = last.valor - prev.valor;
+        const pct = prev.valor !== 0 ? (diff / Math.abs(prev.valor) * 100) : 0;
+        insights.push({ iconName: diff >= 0 ? 'wallet' : 'trendingDown', title: 'Evolução do patrimônio', desc: `Seu patrimônio ${diff >= 0 ? 'cresceu' : 'caiu'} ${formatCurrency(Math.abs(diff))} (${pct.toFixed(1)}%) no último mês com movimentação, totalizando ${formatCurrency(last.valor)}.` });
+      } else {
+        const total = cachedAccounts.reduce((s, a) => s + Number(a.saldoAtual), 0) + cachedInvestments.reduce((s, i) => s + Number(i.patrimônioAtual), 0);
+        insights.push({ iconName: 'wallet', title: 'Evolução do patrimônio', desc: `Ainda não há histórico suficiente para calcular a evolução. Patrimônio atual: ${formatCurrency(total)}.` });
+      }
+
+      // Aumento ou redução de despesas
+      let despCur = 0, despPrev = 0;
+      cachedTransactions.forEach(t => {
+        if (t.tipo !== 'despesa') return;
+        if (t.data && t.data.startsWith(curMonth)) despCur += Number(t.valor);
+        if (t.data && t.data.startsWith(prevMonth)) despPrev += Number(t.valor);
+      });
+      const despDiff = despCur - despPrev;
+      const despPct = despPrev !== 0 ? (despDiff / despPrev * 100) : (despCur > 0 ? 100 : 0);
+      insights.push({
+        iconName: despDiff <= 0 ? 'checkCircle' : 'alertTriangle', title: 'Despesas do mês',
+        desc: (despPrev === 0 && despCur === 0) ? 'Nenhuma despesa registrada nos últimos dois meses.' :
+          `Suas despesas ${despDiff >= 0 ? 'aumentaram' : 'diminuíram'} ${Math.abs(despPct).toFixed(1)}% em relação ao mês anterior (${formatCurrency(despPrev)} → ${formatCurrency(despCur)}).`
+      });
+
+      // Maior compra do período
+      const despesasMes = cachedTransactions.filter(t => t.tipo === 'despesa' && t.data && t.data.startsWith(curMonth));
+      if (despesasMes.length > 0) {
+        const maior = despesasMes.reduce((a, b) => Number(b.valor) > Number(a.valor) ? b : a);
+        const cat = cachedCategories.find(c => c.id === maior.categoriaId);
+        insights.push({ iconName: 'shoppingBag', title: 'Maior compra do período', desc: `${maior.descricao || maior.estabelecimento || (cat ? cat.nome : 'Despesa')} foi a maior compra do mês, no valor de ${formatCurrency(Number(maior.valor))}${maior.estabelecimento ? ' em ' + maior.estabelecimento : ''}.` });
+      } else {
+        insights.push({ iconName: 'shoppingBag', title: 'Maior compra do período', desc: 'Nenhuma despesa registrada neste mês ainda.' });
+      }
+
+      // Meta de economia (definida em Mais > Meta de Economia)
+      const metaEconomia = await loadMetaEconomia();
+      if (metaEconomia && metaEconomia > 0) {
+        let receitasCur = 0;
+        cachedTransactions.forEach(t => { if (t.tipo === 'receita' && t.data && t.data.startsWith(curMonth)) receitasCur += Number(t.valor); });
+        const economiaMesAtual = receitasCur - despCur;
+        const pctMeta = (economiaMesAtual / metaEconomia) * 100;
+        if (economiaMesAtual >= metaEconomia) {
+          insights.push({ iconName: 'checkCircle', title: 'Meta de economia', desc: `Você atingiu ${pctMeta.toFixed(0)}% da sua meta de economia mensal de ${formatCurrency(metaEconomia)} — parabéns!` });
+        } else if (economiaMesAtual > 0) {
+          insights.push({ iconName: 'trophy', title: 'Meta de economia', desc: `Você já economizou ${formatCurrency(economiaMesAtual)} este mês, ${pctMeta.toFixed(0)}% da meta de ${formatCurrency(metaEconomia)}.` });
+        } else {
+          insights.push({ iconName: 'alertTriangle', title: 'Meta de economia', desc: `Suas despesas superaram as receitas este mês, então ainda não há economia acumulada para a meta de ${formatCurrency(metaEconomia)}.` });
+        }
+      }
+
+      insights.forEach(ins => {
+        const card = document.createElement('div');
+        card.className = 'insight-card';
+        card.innerHTML = `<div class="insight-icon">${icon(ins.iconName, 20)}</div><div><div class="insight-title">${escapeHtml(ins.title)}</div><div class="insight-desc">${escapeHtml(ins.desc)}</div></div>`;
+        container.appendChild(card);
+      });
+    }
+
+    // ==========================================
+    // BACKUP: EXPORTAR / IMPORTAR DADOS (JSON)
+    // ==========================================
+    async function exportBackup() {
+      try {
+        const payload = await db.exportAll();
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const stamp = new Date().toISOString().slice(0, 10);
+        a.href = url;
+        a.download = `money-tracker-backup-${stamp}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        showToast('Não foi possível gerar o backup: ' + err.message, 'error');
+      }
+    }
+
+    function handleImportFile(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const payload = JSON.parse(e.target.result);
+          if (payload.app !== 'MoneyTracker' || !payload.data) {
+            showToast('Este arquivo não parece ser um backup válido do Money Tracker.', 'error');
+            return;
+          }
+          const ok = await showConfirm({ title: 'Restaurar backup?', message: 'Isso vai substituir TODOS os dados atuais pelos dados deste arquivo. Essa ação não pode ser desfeita.', confirmText: 'Restaurar' });
+          if (!ok) return;
+          await db.importAll(payload);
+          await renderAll();
+          showToast('Backup importado com sucesso.', 'success');
+        } catch (err) {
+          showToast('Não foi possível importar o backup: ' + err.message, 'error');
+        } finally {
+          event.target.value = '';
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    // ==========================================
+    // ZONA DE RISCO: reset completo do app
+    // ==========================================
+    async function resetApp() {
+      const step1 = await showConfirm({ title: 'Resetar o app?', message: 'Isso vai apagar PERMANENTEMENTE todos os dados do Money Tracker deste dispositivo: contas, categorias, transações, investimentos, PIN e meta de economia. Essa ação não pode ser desfeita.', confirmText: 'Continuar' });
+      if (!step1) return;
+      const step2 = await showConfirm({ title: 'Tem certeza mesmo?', message: 'Considere exportar um backup antes de continuar. Essa é a última confirmação.', confirmText: 'Resetar tudo' });
+      if (!step2) return;
+      try {
+        if (db.db) { db.db.close(); }
+        await new Promise((resolve, reject) => {
+          const request = indexedDB.deleteDatabase('MoneyTrackerDB');
+          request.onsuccess = () => resolve();
+          request.onerror = (e) => reject(e.target.error);
+          request.onblocked = () => resolve();
+        });
+        try { localStorage.clear(); } catch (e) { /* armazenamento indisponível: ignora */ }
+        showToast('App resetado com sucesso. Recarregando…', 'success');
+        setTimeout(() => location.reload(), 900);
+      } catch (err) {
+        showToast('Não foi possível resetar o app: ' + err.message, 'error');
+      }
+    }
+
+    // ==========================================
+    // BLOQUEIO POR PIN (segurança local do app)
+    // ==========================================
+    async function sha256(text) {
+      const enc = new TextEncoder().encode(text);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', enc);
+      return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    async function getStoredPinHash() { return db.getConfigValue('pinHash', null); }
+    async function setStoredPinHash(hash) { return db.setConfigValue('pinHash', hash); }
+    async function clearStoredPinHash() { return db.deleteConfigValue('pinHash'); }
+
+    let pinBuffer = '';
+    let pinMode = 'unlock'; // 'unlock' | 'setup' | 'confirm' | 'change-old' | 'disable'
+    let pinTempNew = '';
+
+    async function initLock() {
+      if (await getStoredPinHash()) {
+        pinMode = 'unlock';
+        showLockScreen('Digite seu PIN', false);
+      } else {
+        document.getElementById('lock-screen').style.display = 'none';
+      }
+    }
+
+    function showLockScreen(title, showCancel) {
+      pinBuffer = '';
+      document.getElementById('lock-title').innerText = title;
+      document.getElementById('lock-cancel-btn').style.display = showCancel ? 'block' : 'none';
+      document.getElementById('lock-screen').style.display = 'flex';
+      updatePinDots();
+    }
+    function hideLockScreen() { document.getElementById('lock-screen').style.display = 'none'; }
+
+    function cancelLockFlow() {
+      pinMode = 'unlock';
+      pinTempNew = '';
+      hideLockScreen();
+    }
+
+    function pinPress(digit) {
+      if (pinBuffer.length >= 4) return;
+      pinBuffer += digit;
+      updatePinDots();
+      if (pinBuffer.length === 4) setTimeout(handlePinComplete, 150);
+    }
+    function pinBackspace() { pinBuffer = pinBuffer.slice(0, -1); updatePinDots(); }
+    function updatePinDots() {
+      document.querySelectorAll('.pin-dot').forEach((dot, i) => dot.classList.toggle('filled', i < pinBuffer.length));
+    }
+    function shakeLock() {
+      const el = document.getElementById('lock-pad');
+      el.classList.add('shake');
+      setTimeout(() => el.classList.remove('shake'), 400);
+    }
+
+    async function handlePinComplete() {
+      const hash = await sha256(pinBuffer);
+
+      if (pinMode === 'unlock') {
+        if (hash === await getStoredPinHash()) { hideLockScreen(); }
+        else { shakeLock(); pinBuffer = ''; updatePinDots(); }
+
+      } else if (pinMode === 'setup') {
+        pinTempNew = pinBuffer;
+        pinMode = 'confirm';
+        showLockScreen('Confirme o novo PIN', true);
+
+      } else if (pinMode === 'confirm') {
+        if (pinBuffer === pinTempNew) {
+          const finalHash = await sha256(pinBuffer);
+          await setStoredPinHash(finalHash);
+          pinMode = 'unlock';
+          pinTempNew = '';
+          hideLockScreen();
+          await renderSettingsSecurity();
+        } else {
+          showToast('Os PINs digitados não coincidem. Tente novamente.', 'error');
+          pinMode = 'setup'; pinTempNew = '';
+          showLockScreen('Crie um PIN de 4 dígitos', true);
+        }
+
+      } else if (pinMode === 'change-old') {
+        if (hash === await getStoredPinHash()) {
+          pinMode = 'setup';
+          showLockScreen('Crie o novo PIN', true);
+        } else { shakeLock(); pinBuffer = ''; updatePinDots(); }
+
+      } else if (pinMode === 'disable') {
+        if (hash === await getStoredPinHash()) {
+          await clearStoredPinHash();
+          pinMode = 'unlock';
+          hideLockScreen();
+          await renderSettingsSecurity();
+        } else { shakeLock(); pinBuffer = ''; updatePinDots(); }
+      }
+    }
+
+    function startSetupPin() { pinMode = 'setup'; showLockScreen('Crie um PIN de 4 dígitos', true); }
+    function startChangePin() { pinMode = 'change-old'; showLockScreen('Digite o PIN atual', true); }
+    function startDisablePin() { pinMode = 'disable'; showLockScreen('Digite o PIN para desativar', true); }
+    async function lockNow() {
+      if (await getStoredPinHash()) { pinMode = 'unlock'; showLockScreen('Digite seu PIN', false); }
+      else { showToast('Nenhum PIN configurado ainda. Vá em "Mais" > Segurança para ativar um PIN de acesso.', 'info'); }
+    }
+
+    async function saveMetaEconomia() {
+      const val = document.getElementById('meta-economia-input').value;
+      await db.setConfigValue('metaEconomia', val || '');
+    }
+    async function loadMetaEconomia() {
+      const val = await db.getConfigValue('metaEconomia', '');
+      return val ? Number(val) : null;
+    }
+    async function renderSettingsSecurity() {
+      const label = document.getElementById('security-status-label');
+      const actionsEl = document.getElementById('security-actions');
+      const metaInput = document.getElementById('meta-economia-input');
+      const metaAtual = await db.getConfigValue('metaEconomia', '');
+      if (metaInput) metaInput.value = metaAtual || '';
+      if (!label || !actionsEl) return;
+      const hasPin = !!(await getStoredPinHash());
+
+      label.innerText = hasPin ? 'PIN de acesso: ativado' : 'PIN de acesso: desativado';
+      actionsEl.innerHTML = '';
+
+      if (hasPin) {
+        const btnChange = document.createElement('button');
+        btnChange.className = 'security-btn';
+        btnChange.innerText = 'Alterar PIN';
+        btnChange.onclick = startChangePin;
+        const btnDisable = document.createElement('button');
+        btnDisable.className = 'security-btn danger';
+        btnDisable.innerText = 'Desativar PIN';
+        btnDisable.onclick = startDisablePin;
+        actionsEl.appendChild(btnChange);
+        actionsEl.appendChild(btnDisable);
+      } else {
+        const btnEnable = document.createElement('button');
+        btnEnable.className = 'security-btn';
+        btnEnable.style.color = 'var(--accent-primary)';
+        btnEnable.style.borderColor = 'var(--accent-primary)';
+        btnEnable.innerText = 'Ativar PIN de acesso';
+        btnEnable.onclick = startSetupPin;
+        actionsEl.appendChild(btnEnable);
+      }
     }
