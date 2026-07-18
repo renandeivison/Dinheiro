@@ -5,7 +5,7 @@
  * pra renderizar a tipografia quando offline).
  */
 
-const CACHE_VERSION = 'v1.5';
+const CACHE_VERSION = 'v1.6';
 const APP_SHELL_CACHE = `mt-app-shell-${CACHE_VERSION}`;
 const FONTS_CACHE = `mt-fonts-${CACHE_VERSION}`;
 
