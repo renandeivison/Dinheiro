@@ -116,7 +116,6 @@
     // ACESSIBILIDADE: fechar modais com Esc + mover o foco pro primeiro campo ao abrir
     // ==========================================
     function focusFirstField(containerId) {
-      armBackGuard();
       const container = document.getElementById(containerId);
       if (container) {
         container.scrollTop = 0;
@@ -167,6 +166,14 @@
     // vez de varrer o DOM procurando `.classList.contains('active')`. Ver
     // NAVIGATION_REFACTORING.md para o racional completo.
     function armBackGuard() {
+      // IMPORTANTE: só deve ser chamada a partir de um gesto real do usuário (clique/
+      // toque numa aba, botão, item de menu etc). Testado no aparelho: um pushState
+      // disparado de DENTRO do handler de popstate (ou seja, como reação ao botão
+      // físico voltar, sem toque na página) não lança erro, mas também não aumenta
+      // history.length — o Chrome/WebView ignora silenciosamente essa entrada por não
+      // ter havido um gesto do usuário na própria página. Por isso NUNCA se deve tentar
+      // rearmar dentro do popstate: cada gesto real empilha exatamente 1 entrada, e o
+      // handler de popstate só consome as entradas já existentes (sem tentar repor).
       try {
         history.pushState({ mtBackGuard: true }, '');
       } catch (e) {
@@ -176,16 +183,27 @@
       }
     }
 
+    // Troca LATERAL entre abas/sub-telas que já estão fora do Início (ex: Extrato ->
+    // Contas, ou Relatórios -> Categorias) não deve empilhar uma entrada nova a cada
+    // toque — senão a profundidade real cresce sem limite conforme o usuário navega
+    // entre abas, exigindo várias voltas seguidas só pra sair do app depois. Nesse caso
+    // SUBSTITUÍMOS a entrada atual (replaceState) em vez de empilhar mais uma. Só
+    // empilha (arma) de verdade quando está saindo do Início pela primeira vez.
+    function armOrReplaceBackGuard(wasDashboard) {
+      if (wasDashboard) { armBackGuard(); return; }
+      try {
+        history.replaceState({ mtBackGuard: true }, '');
+      } catch (e) {
+        // idem — ambiente sem suporte a manipulação de histórico
+      }
+    }
+
     window.addEventListener('popstate', () => {
       const handled = navigationStack.pop();
-      if (handled) {
-        armBackGuard();
-        return;
-      }
+      if (handled) return;
       const dashboardActive = document.getElementById('view-dashboard').classList.contains('active');
       if (!dashboardActive) {
-        switchTab('dashboard', document.querySelector('.nav-item[data-nav="dashboard"]'));
-        armBackGuard();
+        switchTab('dashboard', document.querySelector('.nav-item[data-nav="dashboard"]'), true);
         return;
       }
       // Já está no Início e nada está aberto: não rearma o guard, deixa o
@@ -469,6 +487,7 @@
       }
 
       document.getElementById('modal-account-detail').classList.add('active');
+      armBackGuard();
       focusFirstField('modal-account-detail');
       pushNavigation('modal-account-detail', closeAccountDetailModal, 'Detalhe da Conta');
     }
@@ -737,6 +756,7 @@
         setTransactionType(tipoInicial, btnSeg);
       }
       modal.classList.add('active');
+      armBackGuard();
       focusFirstField('modal-transaction');
       pushNavigation('modal-transaction', closeTransactionModal, 'Nova Transação');
     }
@@ -795,6 +815,14 @@
       // O Voltar aqui não fecha de cara: volta um passo do wizard (qtxBack), e só
       // fecha de verdade quando já está no primeiro passo. A entrada na pilha
       // permanece até qtxClose() rodar (removeNavigation acontece lá).
+      // Só arma UMA entrada de histórico pro wizard inteiro (aqui) — trocar de passo
+      // (qtxNext/qtxBack) é navegação interna do wizard e não deve empilhar nem
+      // consumir entradas de histórico novas, senão cada passo pra trás no wizard via
+      // botão físico dispara um pushState de dentro do próprio handler de popstate
+      // (sem gesto do usuário do ponto de vista do Chrome), que é justamente o padrão
+      // que a proteção anti-"back button trapping" do Chrome/WebView pode ignorar,
+      // fazendo o próximo voltar pular a entrada e sair do app.
+      armBackGuard();
       pushNavigation('modal-quick-tx', qtxBack, 'Lançamento Rápido');
     }
 
@@ -1202,6 +1230,7 @@
       }
       setupColorPickers();
       modal.classList.add('active');
+      armBackGuard();
       focusFirstField('modal-account');
       pushNavigation('modal-account', closeAccountModal, 'Modal Conta');
     }
@@ -1317,6 +1346,7 @@
       }
 
       document.getElementById('modal-investment-detail').classList.add('active');
+      armBackGuard();
       focusFirstField('modal-investment-detail');
       pushNavigation('modal-investment-detail', closeInvestmentDetailModal, 'Detalhe do Ativo');
 
@@ -1348,6 +1378,7 @@
         btnDel.style.display = 'block';
       } else { document.getElementById('modal-investment-title').innerText = 'Nova Aplicação'; }
       modal.classList.add('active');
+      armBackGuard();
       focusFirstField('modal-investment');
       pushNavigation('modal-investment', closeInvestmentModal, 'Novo Investimento');
     }
@@ -1411,6 +1442,7 @@
       }
       setupColorPickers();
       modal.classList.add('active');
+      armBackGuard();
       focusFirstField('modal-category');
       pushNavigation('modal-category', closeCategoryModal, 'Nova Categoria');
     }
@@ -1466,13 +1498,26 @@
       });
     }
 
-    async function switchTab(viewId, btn) {
+    async function switchTab(viewId, btn, fromPopstate = false) {
+      const wasDashboard = document.getElementById('view-dashboard').classList.contains('active');
+
+      // Tocar diretamente na aba "Início" (não pelo botão físico voltar) enquanto se
+      // está em outra aba: em vez de trocar a tela aqui e deixar a entrada de
+      // histórico da aba anterior órfã (o que fazia a profundidade real crescer a
+      // cada troca de aba), consome essa entrada de verdade com um history.back() e
+      // deixa o próprio handler de popstate terminar a troca — ele já faz exatamente
+      // isso quando a pilha de navegação está vazia e não está no Início.
+      if (viewId === 'dashboard' && !wasDashboard && !fromPopstate) {
+        history.back();
+        return;
+      }
+
       document.querySelectorAll('.section-view').forEach(v => v.classList.remove('active'));
       document.getElementById('view-' + viewId).classList.add('active');
       document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
       btn.classList.add('active');
       window.scrollTo(0, 0);
-      if (viewId !== 'dashboard') armBackGuard();
+      if (viewId !== 'dashboard') armOrReplaceBackGuard(wasDashboard);
       renderCachedViews();
       if (viewId === 'mais') await renderSettingsSecurity();
     }
@@ -1480,13 +1525,14 @@
     // Navega para uma sub-tela acessada a partir do menu "Mais" (Relatórios, Investimentos, Locais,
     // Rankings, Categorias, Calendário, Insights). Mantém "Mais" marcado como aba ativa.
     async function goToSubView(viewId) {
+      const wasDashboard = document.getElementById('view-dashboard').classList.contains('active');
       document.querySelectorAll('.section-view').forEach(v => v.classList.remove('active'));
       document.getElementById('view-' + viewId).classList.add('active');
       document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
       const maisBtn = document.querySelector('.nav-item[data-nav="mais"]');
       if (maisBtn) maisBtn.classList.add('active');
       window.scrollTo(0, 0);
-      armBackGuard();
+      armOrReplaceBackGuard(wasDashboard);
       renderCachedViews();
       if (viewId === 'relatorios') { renderReport(); setTimeout(updateReportTabsScrollHint, 0); }
       else if (viewId === 'calendario') renderCalendar();
